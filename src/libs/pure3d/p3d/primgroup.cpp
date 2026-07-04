@@ -14,8 +14,13 @@
 #include <pddi/pddiext.hpp>
 #include <p3d/anim/vertexanimkey.hpp>
 #include <pddi/base/baseshader.hpp>
+#if defined(RAD_PSP)
+#include <p3d/view.hpp>
+#include <p3d/camera.hpp>
+#endif
 
 #include <string.h>
+#include <stdio.h>
 
 
 #define INDEXED_STREAM_COLOUR_WITH_OFFSET(  i, color, offset )  \
@@ -202,6 +207,9 @@ tPrimGroupStreamed::tPrimGroupStreamed(int nVertex, unsigned format, int nIndex,
     tPrimGroup(nVertex), mIndexCount(nIndex), mIndices(NULL), mVertexList(NULL)
 {
     mVertexFormat = format;
+#if defined(RAD_PSP)
+    mPspBuffer = NULL;
+#endif
 
     if (allocate)
     {
@@ -224,11 +232,52 @@ tPrimGroupStreamed::~tPrimGroupStreamed()
 {
     tRefCounted::Release(mVertexList);
     delete[] mIndices;
+#if defined(RAD_PSP)
+    tRefCounted::Release( mPspBuffer );
+    mPspBuffer = NULL;
+#endif
 }
 
 void tPrimGroupStreamed::Display()
 {
     P3DASSERT(mVertexList);
+
+#if defined(RAD_PSP)
+    // Build a static VBO once and draw it via the buffered path (glDrawElements)
+    // instead of re-streaming every vertex through immediate mode
+    // (glBegin/glVertex3f) each frame — the immediate path makes many-mesh
+    // scenes (the frontend room: camset = 280 meshes) unplayable on PSP. All
+    // scene geometry is indexed; non-indexed prim groups fall through below.
+    if( mIndexCount > 0 && mVertexList )
+    {
+        if( mPspBuffer == NULL )
+        {
+            unsigned vfmt = mVertexList->GetFormat() & ~(PDDI_V_INDICES | PDDI_V_WEIGHTS);
+            int nv = mVertexList->GetNumVertices();
+            pddiPrimBufferDesc desc( mPrimType, vfmt, nv, mIndexCount );
+            mPspBuffer = p3d::device->NewPrimBuffer( &desc );
+
+            rmt::Vector*  pos = mVertexList->GetPositions();
+            rmt::Vector*  nrm = ( vfmt & PDDI_V_NORMAL ) ? mVertexList->GetNormals() : NULL;
+            rmt::Vector2* uv  = ( vfmt & 0xf )           ? mVertexList->GetUVs( 0 )   : NULL;
+            pddiColour*   col = ( vfmt & PDDI_V_COLOUR ) ? mVertexList->GetColours( 0 ) : NULL;
+
+            pddiPrimBufferStream* s = mPspBuffer->Lock();
+            for( int i = 0; i < nv; i++ )
+            {
+                if( nrm ) s->Normal( nrm[i].x, nrm[i].y, nrm[i].z );
+                if( uv )  s->TexCoord2( uv[i].u, uv[i].v );
+                if( col ) s->Colour( col[i] );
+                s->Position( pos[i].x, pos[i].y, pos[i].z );   // writes coord + advances
+            }
+            mPspBuffer->Unlock( s );
+            mPspBuffer->SetIndices( mIndices, mIndexCount );
+        }
+
+        p3d::pddi->DrawPrimBuffer( mShader->GetShader(), mPspBuffer );
+        return;
+    }
+#endif
 
     // don't send indices and weights to the stream renderer
     // the skinning is done by tPrimGroupStreamed::Display();
@@ -480,9 +529,90 @@ bool tPrimGroupSkinnedPC::SetVertices(unsigned start, unsigned count, rmt::Vecto
 void tPrimGroupSkinnedPC::Display(void)
 {
 	pddiPrimBufferStream *stream;
-	
+
     int count = mVertexCount;
     SkinVertex *verts = mVertices;
+
+    {
+        static int s_skdbg = 0;
+        if( s_skdbg < 24 )
+        {
+            Matrix* m0 = (count > 0) ? matrixPalette[verts[0].indices[0]] : NULL;
+            const char* sh = (mShader && mShader->GetShader()) ? mShader->GetName() : "(null)";
+            FILE* f = fopen("ms0:/shar_gu.log","a");
+            if(f){ fprintf(f,"SKIN %d: sh='%s' nv=%d m0t=(%.2f,%.2f,%.2f) srcpos0=(%.2f,%.2f,%.2f)\n",
+                    s_skdbg, sh ? sh : "(noname)", count,
+                    m0?m0->m[3][0]:0.f, m0?m0->m[3][1]:0.f, m0?m0->m[3][2]:0.f,
+                    count>0?verts[0].position.x:0.f, count>0?verts[0].position.y:0.f, count>0?verts[0].position.z:0.f); fclose(f); }
+            s_skdbg++;
+        }
+        // Full matrix-palette dump for the first few skinned draws: every bone's
+        // world-space translation (m[3]) so we can spot garbage/uninitialised
+        // entries (a single wild bone flings its verts out of frame). A NULL entry
+        // or a translation far outside the character's ~2m extent is the smoking
+        // gun for a mis-indexed / unposed skeleton.
+        static int s_paldbg = 0;
+        if( s_paldbg < 4 )
+        {
+            FILE* f = fopen("ms0:/shar_skel.log","a");
+            if(f)
+            {
+                fprintf(f,"--- SKIN draw %d: nMatrices=%u nv=%d ---\n", s_paldbg, nMatrices, count);
+                for(unsigned b = 0; b < nMatrices; b++)
+                {
+                    Matrix* m = matrixPalette[b];
+                    if(m)
+                        fprintf(f,"  bone %2u: t=(%.2f,%.2f,%.2f)\n", b, m->m[3][0], m->m[3][1], m->m[3][2]);
+                    else
+                        fprintf(f,"  bone %2u: NULL\n", b);
+                }
+                // Project a few FINAL (fully weight-blended) skinned vertices through
+                // the active camera. WorldToView returns normalised screen coords: on
+                // screen == x,y in [0,1] and the bool 'visible' true. If Homer's verts
+                // land outside [0,1] (or behind the camera), that's why he's invisible
+                // despite depth-off; if they're all inside [0,1], the bug is draw-state,
+                // not placement.
+                tView* dbgView = p3d::context ? p3d::context->GetView() : NULL;
+                tCamera* dbgCam = dbgView ? dbgView->GetCamera() : NULL;
+                if( dbgCam && count > 0 )
+                {
+                    int samp[3] = { 0, count/2, count-1 };
+                    for(int s = 0; s < 3; s++)
+                    {
+                        int idx = samp[s];
+                        SkinVertex* sv = &verts[idx];
+                        rmt::Vector* p = &sv->position;
+                        // Mirror the main loop's weight blend exactly.
+                        float bw[4];
+                        bw[0] = sv->weights[0];
+                        bw[1] = sv->weights[1];
+                        bw[2] = sv->weights[2];
+                        bw[3] = 1.f - (sv->weights[0]+sv->weights[1]+sv->weights[2]);
+                        int nb = (bw[0] >= 1.f) ? 1 : 4;
+                        rmt::Vector w = { 0.f, 0.f, 0.f };
+                        for(int b = 0; b < nb; b++)
+                        {
+                            Matrix* m = matrixPalette[sv->indices[b]];
+                            if(!m) continue;
+                            w.x += (m->m[0][0]*p->x + m->m[1][0]*p->y + m->m[2][0]*p->z + m->m[3][0]) * bw[b];
+                            w.y += (m->m[0][1]*p->x + m->m[1][1]*p->y + m->m[2][1]*p->z + m->m[3][1]) * bw[b];
+                            w.z += (m->m[0][2]*p->x + m->m[1][2]*p->y + m->m[2][2]*p->z + m->m[3][2]) * bw[b];
+                        }
+                        rmt::Vector vv = { 0.f, 0.f, 0.f };
+                        bool vis = dbgCam->WorldToView( w, &vv );
+                        fprintf(f,"  v%d(idx=%d): world=(%.2f,%.2f,%.2f) -> view=(%.3f,%.3f,%.3f) vis=%d\n",
+                                s, idx, w.x, w.y, w.z, vv.x, vv.y, vv.z, (int)vis);
+                    }
+                }
+                else
+                {
+                    fprintf(f,"  (no camera on active view: view=%p cam=%p)\n", (void*)dbgView, (void*)dbgCam);
+                }
+                fclose(f);
+            }
+            s_paldbg++;
+        }
+    }
 
 	if(mVertexFormat & PDDI_V_NORMAL){
 
@@ -584,7 +714,12 @@ void tPrimGroupSkinnedPC::Display(void)
 
 	}
 	//buffer rendering
-	p3d::pddi->DrawPrimBuffer(mShader->GetShader(), mBuffer);
+	{
+		extern bool g_pspSkinnedDraw;      // TEST: mark this as a skinned char draw
+		g_pspSkinnedDraw = true;
+		p3d::pddi->DrawPrimBuffer(mShader->GetShader(), mBuffer);
+		g_pspSkinnedDraw = false;
+	}
 
 }
 

@@ -196,12 +196,33 @@ void tImageConverter::UpdateTexture(tImage* image, tTexture* texture, int mip)
 }
 
 //-------------------------------------------------------------------
+// Expand an 8-bit paletted source image into an already-expanded 32-bit RGBA
+// lock. Needed on platforms without native paletted (CLUT) textures (PSP),
+// where pglTexture converts PALETTIZED -> RGB: the fill must look up the
+// palette per pixel instead of copying 8-bit indices through a 32-bit path
+// (which reads 4x past the source buffer and corrupts the heap).
+static void FillPal8Expand(tImage* img, pddiLockInfo* lock)
+{
+    tImage8* image = (tImage8*)img;
+    const unsigned char* src = image->GetColourChannel();
+    const unsigned*      pal = image->GetPalette();
+    unsigned char*       destRow = (unsigned char*)lock->bits;
+    for (int j = 0; j < lock->height; j++)
+    {
+        unsigned* dest = (unsigned*)destRow;
+        for (int x = 0; x < lock->width; x++)
+            dest[x] = pal[ src[x] ];
+        src += lock->width;
+        destRow += lock->pitch;
+    }
+}
+
 void tImageConverter::UpdateSurface(tImage* image, pddiLockInfo* lock)
 {
     P3DASSERT(image);
     P3DASSERT(lock);
     pddiPixelFormat format = lock->format;
-    
+
     // we can't update a texture with an image of a different size
     if( (image->GetWidth() != (lock->width)) ||
          (image->GetHeight() != (lock->height)) )
@@ -210,9 +231,18 @@ void tImageConverter::UpdateSurface(tImage* image, pddiLockInfo* lock)
         return;
     }
 
+    // 8-bit paletted source into a non-paletted (expanded) target: expand via
+    // the palette. On PSP, pglTexture expands PALETTIZED -> ARGB8888, so the
+    // lock format is 32-bit while the source is still 8-bit indices.
+    if( image->GetDepth() == 8 && format != PDDI_PIXEL_PAL8 && format != PDDI_PIXEL_PAL4 )
+    {
+        FillPal8Expand(image, lock);
+        return;
+    }
+
     switch(format)
     {
-        case PDDI_PIXEL_PAL8:         
+        case PDDI_PIXEL_PAL8:
             FillLockPAL8(image, lock);
          break;
 
@@ -288,16 +318,19 @@ void tImageConverter::UpdateVolumeTexture(tImage* image, pddiLockInfo* lock, int
 //-------------------------------------------------------------------
 void tImageConverter::FillLockPAL8(tImage* img, pddiLockInfo* lock)
 {
-    P3DASSERT(img->GetDepth() == 8);
     tImage8* image = (tImage8*)img;
-    unsigned char* dest = (unsigned char*)lock->bits;   
+    unsigned char* dest = (unsigned char*)lock->bits;
     unsigned char* src = image->GetColourChannel();
     P3DASSERT(src);
 
+    // Row size honours the paletted bit depth (4- or 8-bit); a 4-bit row is
+    // width/2 bytes. Using lock->width unconditionally overruns 4-bit sources.
+    int rowBytes = (lock->width * lock->depth) / 8;
+
     for (int j = 0; j < lock->height; j++)
     {
-        memcpy(dest, src, lock->width);
-        src += lock->width;
+        memcpy(dest, src, rowBytes);
+        src += rowBytes;
         dest += lock->pitch;
     }
 }

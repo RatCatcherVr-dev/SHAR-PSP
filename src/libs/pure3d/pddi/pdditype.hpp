@@ -102,7 +102,7 @@ public:
     #include <pddi/pddiwin32.hpp>
 #endif
 
-#ifdef RAD_LINUX
+#if defined(RAD_LINUX) || defined(RAD_PSP)
     #include <pddi/pddilinux.hpp>
 #endif
 

@@ -10,6 +10,8 @@
     #include <p3d/platform/linux/platform.hpp>
 #elif defined(RAD_WIN32) || defined(RAD_UWP)
     #include <p3d/platform/win32/platform.hpp>
+#elif defined(RAD_PSP)
+    #include <p3d/platform/psp/platform.hpp>
 #endif
 
 #endif // _BASE_PLATFORM_HPP

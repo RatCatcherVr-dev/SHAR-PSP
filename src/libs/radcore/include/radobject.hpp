@@ -31,7 +31,7 @@
 // Build Configuration Check
 //=============================================================================
 
-#if !defined(RAD_UWP) && !defined(RAD_WIN32)
+#if !defined(RAD_UWP) && !defined(RAD_WIN32) && !defined(RAD_PSP)
     #error 'FTech requires definition of RAD_UWP or RAD_WIN32'
 #endif
 #if !defined(RAD_DEBUG) && !defined(RAD_TUNE) && !defined(RAD_RELEASE) 

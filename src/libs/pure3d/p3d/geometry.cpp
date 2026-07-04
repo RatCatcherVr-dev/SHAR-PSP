@@ -13,6 +13,13 @@
 #include <pddi/pddiext.hpp>
 #include <constants/chunkids.hpp>
 #include <p3d/array.hpp>
+#if defined(RAD_PSP)
+#include <p3d/context.hpp>
+#include <p3d/view.hpp>
+#include <p3d/camera.hpp>
+#include <p3d/matrixstack.hpp>
+#include <math.h>
+#endif
 
 #include <string.h>
 
@@ -89,6 +96,35 @@ void tGeometry::SetPrimGroup(int i, tPrimGroup* group)
 //------------------------------------------------------------------------
 void tGeometry::Display()
 {
+#if defined(RAD_PSP)
+    // Frustum-cull the whole mesh: the frontend room (camset) is ~280 separate
+    // meshes but the menu camera frames only part of it, and per-draw-call
+    // overhead dominates the frame on PSP. Transform the bounding sphere into
+    // camera space (via the current MODELVIEW) and skip the mesh entirely if it
+    // falls outside the view frustum. A second transformed point gives the
+    // scaled radius so any model/scene scale is accounted for.
+    {
+        tView* view = p3d::context ? p3d::context->GetView() : NULL;
+        tCamera* cam = view ? view->GetCamera() : NULL;
+        if( false && cam && sphere.radius > 0.0f )   // DIAG: cull disabled
+        {
+            rmt::Vector centreCam, edgeCam;
+            rmt::Vector edge = sphere.centre;
+            edge.x += sphere.radius;
+            p3d::stack->TransformVector( sphere.centre, &centreCam );
+            p3d::stack->TransformVector( edge, &edgeCam );
+            float dx = edgeCam.x - centreCam.x;
+            float dy = edgeCam.y - centreCam.y;
+            float dz = edgeCam.z - centreCam.z;
+            float r = sqrtf( dx*dx + dy*dy + dz*dz );
+            if( r < sphere.radius ) r = sphere.radius;
+            if( !cam->SphereVisibleCamera( centreCam, r ) )
+            {
+                return;
+            }
+        }
+    }
+#endif
     for( unsigned i = 0; i < primGroup.Size(); i++)
     {
         if( primGroup[i])

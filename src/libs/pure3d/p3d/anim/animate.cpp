@@ -654,19 +654,29 @@ bool tFrameControllerLoader::CheckFC(unsigned t)
 {
     switch(t)
     {
-        case Pure3DAnimationTypes::ANIMATED_OBJECT_AOBJ:
+        // PSP frontend build supports the subset of animation types actually
+        // used by the menu scene (pose, texture, billboard, scenegraph
+        // transform/visibility, pose-visibility). The remaining types pull in
+        // heavy/unported subsystems (effects/particles, vertex animation,
+        // full expression mixer, vector cameras, light/shader animation) and
+        // are not referenced by any frontend .p3d, so they are compiled out.
+        // CAMERA_CAM is enabled on PSP too: the frontend menu's opening camera
+        // fly-in is a camera-animation frame controller on the CamAndSet object.
         case Pure3DAnimationTypes::CAMERA_CAM:
+#if !defined(RAD_PSP)
+        case Pure3DAnimationTypes::ANIMATED_OBJECT_AOBJ:
         case Pure3DAnimationTypes::EXPRESSION_EXP:
         case Pure3DAnimationTypes::LIGHT_LITE:
+        case Pure3DAnimationTypes::EFFECT_EFX:
+        case Pure3DAnimationTypes::VERTEX_VRTX:                 //vertex animation added
+        case Pure3DAnimationTypes::SHADER_SHAD:
+#endif
         case Pure3DAnimationTypes::POSE_TRANSFORM_PTRN:
         case Pure3DAnimationTypes::POSE_VISIBILITY_PVIS:
         case Pure3DAnimationTypes::SCENEGRAPH_TRANSFORM_STRN:
         case Pure3DAnimationTypes::SCENEGRAPH_VISIBILITY_SVIS:
         case Pure3DAnimationTypes::TEXTURE_TEX:
         case Pure3DAnimationTypes::BILLBOARD_QUAD_GROUP_BQG:
-        case Pure3DAnimationTypes::EFFECT_EFX:
-        case Pure3DAnimationTypes::VERTEX_VRTX:                 //vertex animation added
-        case Pure3DAnimationTypes::SHADER_SHAD:
             return true;
             break;
         default:
@@ -703,21 +713,8 @@ tFrameController* tFrameControllerLoader::LoadFC(char* fcname, unsigned t, tChun
 
     switch (type)
     {
-        case Pure3DAnimationTypes::ANIMATED_OBJECT_AOBJ:
-            {
-                tAnimatedObject* object = p3d::find<tAnimatedObject>(store, hname);
-                if (object)
-                {
-                    tAnimatedObjectFrameController* controller = new tAnimatedObjectFrameController;
-                    controller->SetName(fcname);
-                    controller->SetAnimatedObject(object);
-                    controller->SetCurrentAnimation(0);
-                    controller->SetFrame(frameOffset);
-                    fc = controller;
-                }
-            }
-            break;
-
+        // CAMERA_CAM enabled on PSP (menu camera intro); the rest of the heavy
+        // controllers stay excluded.
         case Pure3DAnimationTypes::CAMERA_CAM:
             {
                 tVectorCamera* camera = p3d::find<tVectorCamera>(store, hname);
@@ -727,6 +724,22 @@ tFrameController* tFrameControllerLoader::LoadFC(char* fcname, unsigned t, tChun
                     controller->SetName(fcname);
                     controller->SetCamera(camera);
                     controller->SetAnimation(animation);
+                    controller->SetFrame(frameOffset);
+                    fc = controller;
+                }
+            }
+            break;
+
+#if !defined(RAD_PSP)
+        case Pure3DAnimationTypes::ANIMATED_OBJECT_AOBJ:
+            {
+                tAnimatedObject* object = p3d::find<tAnimatedObject>(store, hname);
+                if (object)
+                {
+                    tAnimatedObjectFrameController* controller = new tAnimatedObjectFrameController;
+                    controller->SetName(fcname);
+                    controller->SetAnimatedObject(object);
+                    controller->SetCurrentAnimation(0);
                     controller->SetFrame(frameOffset);
                     fc = controller;
                 }
@@ -762,12 +775,13 @@ tFrameController* tFrameControllerLoader::LoadFC(char* fcname, unsigned t, tChun
                 }
             }
             break;
+#endif // !RAD_PSP  (AOBJ / CAMERA / EXPRESSION / LIGHT)
 
         case Pure3DAnimationTypes::POSE_VISIBILITY_PVIS:
             {
                 tCompositeDrawable* drawable = p3d::find<tCompositeDrawable>(store, hname);
                 if (drawable)
-                {               
+                {
                     tCompDrawVisibilityAnimationController* controller = new tCompDrawVisibilityAnimationController;
                     controller->SetName(fcname);
                     controller->SetDrawable(drawable);  
@@ -857,6 +871,7 @@ tFrameController* tFrameControllerLoader::LoadFC(char* fcname, unsigned t, tChun
             }
             break;
 
+#if !defined(RAD_PSP)
         case Pure3DAnimationTypes::EFFECT_EFX:
             {
                 tEffect* effect = p3d::find<tEffect>(store,hname);
@@ -915,6 +930,7 @@ tFrameController* tFrameControllerLoader::LoadFC(char* fcname, unsigned t, tChun
             }
 
             break;
+#endif // !RAD_PSP  (EFFECT / VERTEX / SHADER)
 
         default:
             P3DASSERT(0);
@@ -1462,7 +1478,12 @@ tEntity* tAnimationLoader::LoadObject(tChunkFile* f, tEntityStore* store)
                     unsigned int animSize = pcSize;
                     #elif defined(RAD_UWP)
                     unsigned int animSize = xboxSize;
+                    #elif defined(RAD_PSP)
+                    unsigned int animSize = pcSize;   // PSP loads the PC assets
+                    #else
+                    unsigned int animSize = pcSize;
                     #endif
+                    (void)ps2Size; (void)xboxSize; (void)gcSize;
                     if ((anim->numGroups==0)&&(animSize>0))
                     {
                         unsigned int factor = sizeof(void*) / 4;

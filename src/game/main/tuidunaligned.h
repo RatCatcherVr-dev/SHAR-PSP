@@ -19,7 +19,7 @@
 //
 // This is a 64 bit number
 //
-#if defined( RAD_WIN32 ) || defined ( RAD_UWP )
+#if defined( RAD_WIN32 ) || defined ( RAD_UWP ) || defined ( RAD_PSP )
     #include <cstdint>
     typedef uint64_t radInt64;
 #else

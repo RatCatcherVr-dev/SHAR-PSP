@@ -13,6 +13,7 @@
 #include <p3d/utility.hpp>
 
 #include <libpng16/png.h> // vcpkg handles libraries like this now :)
+#include <string.h>
 
 static void LoadPNG4(png_structp, png_infop, tImageHandler::Builder*);
 static void LoadPNG8(png_structp, png_infop, tImageHandler::Builder*);
@@ -59,6 +60,14 @@ bool tPNGHandler::CheckFormat(Format format)
 
 void tPNGHandler::CreateImage(tFile* file, tImageHandler::Builder* builder)
 {
+    // A missing/failed external file yields an empty tFile (GetSize()==0). Bail
+    // before feeding garbage to libpng, whose error handler asserts and then
+    // leaves the reader in a bad state -> crash on PSP.
+    if (file == NULL || file->GetSize() == 0)
+    {
+        return;
+    }
+
     png_structp pPNG = png_create_read_struct_2
          (PNG_LIBPNG_VER_STRING, 
          0, p3d_png_err, p3d_png_warn, 

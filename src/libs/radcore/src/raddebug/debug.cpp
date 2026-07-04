@@ -45,8 +45,17 @@
 
 int rDebugVsnPrintf( char *buffer, size_t count, const char *format, va_list argptr )
 {
-    #if defined(RAD_WIN32) || defined(RAD_UWP)
+    #if defined(RAD_WIN32) || defined(RAD_UWP) || defined(RAD_PSP)
         return vsnprintf( buffer, count, format, argptr );
+    #else
+        // No platform branch matched: produce a valid empty string rather than
+        // falling off the end of a value-returning function (undefined behaviour
+        // — on MIPS/-O2 this crashes the calling thread).
+        if ( count > 0 )
+        {
+            buffer[ 0 ] = '\0';
+        }
+        return 0;
     #endif
 }
 

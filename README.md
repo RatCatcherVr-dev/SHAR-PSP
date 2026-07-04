@@ -70,6 +70,56 @@ When working with the source you will need these installed:
 #### Building
 If the setup was successful, you should now be able to build any project in the solution. When building for UWP don't forget to change the config! (example: if it's `ReleaseWindows` make it `ReleaseUwp`).
 
+## PSP Port (Experimental)
+
+An experimental **PSP** target (`RAD_PSP` platform macro) is in progress using the
+`pspdev` toolchain. It reuses the engine's fixed-function renderer through a native
+**sceGU** `pddi` backend (`src/libs/pure3d/pddi/psp`). The frontend main menu — 2D
+UI, text, and the animated 3D living-room scene (Homer, the RC car, glows, TV) —
+currently renders on **real PSP hardware** (tested on a PSP-2000).
+
+### Building
+Requires the `pspdev` SDK (`psp-gcc`, `psp-cmake`). From the repo root:
+```
+psp-cmake -S psp -B psp/build && make -C psp/build -j
+```
+The output EBOOT is `psp/build/EBOOT/EBOOT.PBP`.
+
+### Asset Optimizer (`tools/p3dopt`)
+The PSP has only ~22 MB of usable RAM, shared by everything, and the native sceGU
+backend samples texture data straight from that heap — so a texture's resident cost
+is its full decompressed size. The retail PC assets don't fit (the frontend's
+textures alone are ~24 MB resident, mostly needless 32-bit true-colour), so
+[`tools/p3dopt`](tools/p3dopt/README.md) rewrites `.p3d` files **offline** to shrink
+them before they're deployed:
+
+- **Textures** — paletteize true-colour images to an 8-bit CLUT (4× smaller),
+  optionally downscale to a max power-of-two size, and drop unused mipmaps.
+- **Geometry** — decimate meshes (quadric edge-collapse), converting triangle
+  strips to lists and carrying UVs / normals / colours across the reduction.
+
+It's a small Python tool (Pillow + numpy + `fast-simplification`); every rewrite is
+re-parsed to verify it isn't corrupt. Palette-only is near-lossless and drops the
+frontend's resident texture use from **~24 MB to ~7 MB**.
+
+```
+cd tools/p3dopt
+python3 -m venv .venv && ./.venv/bin/pip install Pillow numpy fast-simplification
+
+# textures only (safe default), whole frontend tree:
+./.venv/bin/python batch.py content/art/frontend psp/dist/art/frontend --paletteize --drop-mips
+
+# textures + geometry decimation (levels):
+./.venv/bin/python batch.py content/art psp/dist/art --paletteize --drop-mips --decimate --reduction 0.5
+
+# inspect where texture RAM goes before deciding settings:
+./.venv/bin/python analyze.py content/art/frontend/scrooby/frontend.p3d
+```
+
+Then deploy the EBOOT plus the optimized assets from `psp/dist/` into
+`PSP/GAME/SHAR/` on the memory stick. See [`tools/p3dopt/README.md`](tools/p3dopt/README.md)
+for the full option reference.
+
 ## Media
 
 ### Windows

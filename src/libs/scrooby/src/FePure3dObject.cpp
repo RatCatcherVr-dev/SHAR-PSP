@@ -28,6 +28,10 @@
 #include "FeScreen.h"
 #include <radmath/radmath.hpp>
 #include "ResourceManager/FeResourceManager.h"
+#if defined(RAD_PSP)
+#include <radtime.hpp>
+#include <stdio.h>
+#endif
 
 // TC [HACK]: Override camera settings.
 //
@@ -38,6 +42,12 @@ namespace Scrooby
     float g_CameraNearPlane = 1.0f;
     float g_CameraFarPlane = 1000.0f;
 }
+
+#if defined(RAD_PSP)
+// Room-backdrop cache hooks (implemented in the GL backend, pddi/gl/glcon.cpp).
+extern "C" void pglCaptureRoomBackdrop( void );
+extern bool     pglRoomBackdropReady( void );
+#endif
 
 //===========================================================================
 // FePure3dObject::FePure3dObject
@@ -204,6 +214,23 @@ void FePure3dObject::SetupMultiController()
 //===========================================================================
 void FePure3dObject::Update( float elapsedTime )
 {
+#if defined(RAD_PSP)
+    // In the standalone frontend some objects' animation is driven explicitly,
+    // not free-run every frame:
+    //  - glow* halos are static (pinned to frame 0 in Render).
+    //  - "camset" (CamAndSet: room set + the shared menu camera + one long baked
+    //    animation) is driven by the harness intro state machine so it plays only
+    //    the intro camera window once, then holds the idle pose. Letting it
+    //    free-run played the ENTIRE baked animation — every camera move and set
+    //    gag in sequence — which read as the camera flying around, the "book"
+    //    opening, and a second (baked-in) racecar.
+    if( m_alias )
+    {
+        const char* a = static_cast<const char*>( *m_alias );
+        if( strncmp( a, "glow", 4 ) == 0 || strcmp( a, "camset" ) == 0 )
+            return;
+    }
+#endif
     AdvanceAnimation( elapsedTime );
 }
 
@@ -309,6 +336,55 @@ void FePure3dObject::AdvanceAnimation( float deltaTime )
 //===========================================================================
 void FePure3dObject::Render()
 {
+#if defined(RAD_PSP)
+    // 3D frontend objects (gag characters) render into the active tView's
+    // camera. The standalone menu path draws the screen via pddi directly and
+    // sets no tView on the context, and the object's model was skipped for
+    // memory anyway — so bail rather than dereference a NULL view/camera. 2D
+    // menu content (sprites, text, polygons) is unaffected.
+    {
+        tView* v = p3d::context->GetView();
+        if( v == NULL || v->GetCamera() == NULL )
+        {
+            return;
+        }
+    }
+
+    // Frontend main-menu glow selection. Mirrors the original
+    // CGuiScreenMainMenu::TurnOnGlowItems(): only the glow object for the
+    // currently-selected menu item is visible; the rest are hidden. The real game
+    // does this via Pure3dObject::SetVisible() from its GameFlow menu controller,
+    // which the standalone harness doesn't run — so we replicate it here, keyed on
+    // the .p3d alias, using the harness-owned selection index (driven by the D-pad).
+    // Retail menu order: 0 Load=vcr, 1 CardGallery=book, 2 Options=sofa,
+    // 3 MiniGame=mini(racecar), 4 NewGame=homr(Homer), 5 Resume=tv.
+    if( m_alias && strncmp( static_cast<const char*>( *m_alias ), "glow", 4 ) == 0 )
+    {
+        static const char* const kGlowByIndex[6] =
+            { "glowvcr", "glowbook", "glowsofa", "glowmini", "glowhomr", "glowtv" };
+        extern int g_pspSelectedGlow;
+        int sel = g_pspSelectedGlow;
+        if( sel < 0 || sel > 5 ) sel = 4;
+        if( strcmp( static_cast<const char*>( *m_alias ), kGlowByIndex[ sel ] ) != 0 )
+        {
+            return;   // not the selected item's glow -> hidden
+        }
+    }
+#endif
+
+#if defined(RAD_PSP)
+    // NOTE: the old room-backdrop cache (render camset once, capture to a texture,
+    // then draw the cached backdrop) is obsolete on the sceGU backend — drawing
+    // the room live is cheap. Its capture step did a full COLOUR+DEPTH Clear right
+    // before drawing the room, which — because camset renders AFTER Homer and the
+    // TV in the frontend's element order — wiped those already-drawn objects every
+    // frame (objects drawn after camset, like the racecar/glows, survived). That
+    // was the "homer/tv missing, room ok" bug. The backdrop path is now a no-op
+    // (pglRoomBackdropReady()==false), so camset just renders like any other 3D
+    // object, depth-tested against the shared buffer. No special-casing, no clear.
+    bool pspCaptureRoom = false;
+#endif
+
     // get the current view window
     //
     tView* currentView = p3d::context->GetView();
@@ -321,7 +397,6 @@ void FePure3dObject::Render()
 
     if( !m_alreadyRendered )
     {
-        m_alreadyRendered = true;
 
         // save reference to the rendering view
         //
@@ -341,9 +416,17 @@ void FePure3dObject::Render()
             SetDrawable( dynamic_cast<tDrawable*>( FeApp::GetInstance()->GetFeResourceManager().GetResource( index ) ) );
             drawable = GetDrawable();
         }
+        // The room scenegraph (FE_LivingRoom) and other 3D objects stream in on
+        // PSP AFTER the menu first draws; committing this one-time setup with a
+        // NULL drawable left the 3D room black forever. Commit only once the
+        // drawable actually resolved, else re-attempt on the next frame.
+        m_alreadyRendered = ( drawable != NULL );
 
-        rAssert( drawable != NULL );
-        sg::Scenegraph* scene = p3d::find<sg::Scenegraph>( drawable->GetUID() );
+        // On PSP the referenced 3D object (e.g. a gag character) may have been
+        // skipped to save memory, leaving a NULL drawable. Guard the deref; the
+        // m_RuntimeDrawable==NULL check below then skips rendering cleanly so the
+        // rest of the menu (background, logo, text, buttons) still draws.
+        sg::Scenegraph* scene = drawable ? p3d::find<sg::Scenegraph>( drawable->GetUID() ) : NULL;
         if( scene != NULL )
         {
             // add any light groups found under scenegraph root
@@ -384,6 +467,29 @@ void FePure3dObject::Render()
             }
         }
 
+#if defined(RAD_PSP)
+        // Glow halos must be static (the "flying ring" was glowhomr's own
+        // multicontroller animating). Freezing the Scrooby-level Advance in
+        // Update() wasn't enough, so pin the controller to frame 0 here and log
+        // once whether a glow actually carries a controller.
+        {
+            bool isGlow = m_alias && strncmp( static_cast<const char*>( *m_alias ), "glow", 4 ) == 0;
+            if( isGlow && m_MultiController != NULL )
+            {
+                m_MultiController->SetFrame( 0.0f );
+                static int s_fz = 0;
+                if( s_fz < 12 )
+                {
+                    FILE* f = fopen("ms0:/shar_freeze.log","a");
+                    if(f){ fprintf(f,"pinned glow '%s' to frame 0 (nframes=%.1f)\n",
+                            static_cast<const char*>(*m_alias),
+                            m_MultiController->GetNumFrames()); fclose(f); }
+                    s_fz++;
+                }
+            }
+        }
+#endif
+
         // add default light, if exists
         //
         if( m_DefaultLight != NULL )
@@ -423,6 +529,23 @@ void FePure3dObject::Render()
     //
     bool oldZBufferEnabled = p3d::pddi->IsZBufferEnabled();
     p3d::pddi->EnableZBuffer( m_zbufferEnabled );
+
+#if defined(RAD_PSP)
+    // DIAG: one line per object — is depth-test requested for it? The couch glow
+    // rendering "over" Homer means either it isn't depth-tested (zbuf=0) or its
+    // geometry is closer than Homer. clearDepth=1 would also let it ignore Homer.
+    {
+        static int s_zc = 0;
+        if( s_zc < 24 )
+        {
+            FILE* f = fopen("ms0:/shar_depth.log","a");
+            if(f){ fprintf(f,"obj '%s' zbuf=%d clearDepth=%d\n",
+                    m_alias ? static_cast<const char*>(*m_alias) : "(null)",
+                    (int)m_zbufferEnabled, (int)m_clearDepthBufferEnabled); fclose(f); }
+            s_zc++;
+        }
+    }
+#endif
 
 #ifdef RAD_UWP
     // save cull mode setting
@@ -503,7 +626,21 @@ void FePure3dObject::Render()
     // draw the damn thing!
     //
     rAssert( m_RuntimeDrawable != NULL );
+#if defined(RAD_PSP)
+    if( pspCaptureRoom )
+    {
+        // Wipe anything drawn before us this frame (within our scissor'd, ~full
+        // rect) so the captured backdrop is the room only, then draw the room.
+        p3d::pddi->Clear( PDDI_BUFFER_COLOUR | PDDI_BUFFER_DEPTH );
+    }
+#endif
     m_RuntimeDrawable->Display();
+#if defined(RAD_PSP)
+    if( pspCaptureRoom )
+    {
+        pglCaptureRoomBackdrop();
+    }
+#endif
 
     // restore everything we changed
     //

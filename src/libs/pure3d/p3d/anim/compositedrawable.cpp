@@ -7,6 +7,12 @@
 ===========================================================================*/
 
 #include <p3d/billboardobject.hpp>
+#if defined(RAD_PSP)
+#include <stdio.h>
+static void complog(const char* s){ FILE* f=fopen("ms0:/shar_comp.log","a"); if(f){ fputs(s,f); fputc('\n',f); fclose(f);} }
+#else
+static inline void complog(const char*){}
+#endif
 #include <p3d/anim/compositedrawable.hpp>
 #include <p3d/anim/skeleton.hpp>
 #include <p3d/anim/polyskin.hpp>
@@ -421,6 +427,9 @@ tEntity* tCompositeDrawableLoader::LoadObject(tChunkFile* f, tEntityStore* store
     tCompositeDrawable* compositeDraw = new tCompositeDrawable(5);
 
     compositeDraw->SetName(name);
+#if defined(RAD_PSP)
+    { char cb[300]; sprintf(cb,"COMP enter '%s' skel='%s'",name,skel); complog(cb); }
+#endif
     
     //
     // Find Skeleton
@@ -431,6 +440,9 @@ tEntity* tCompositeDrawableLoader::LoadObject(tChunkFile* f, tEntityStore* store
         compositeDraw->skeleton = skeleton;
         compositeDraw->skeleton->AddRef();
         compositeDraw->SetPose(skeleton->NewPose());
+#if defined(RAD_PSP)
+        complog("COMP: skeleton found + pose set");
+#endif
     }
 
     long numTranslucentElements = 0;
@@ -444,6 +456,9 @@ tEntity* tCompositeDrawableLoader::LoadObject(tChunkFile* f, tEntityStore* store
     while(f->ChunksRemaining())
     {
         f->BeginChunk();
+#if defined(RAD_PSP)
+        { char cb[80]; sprintf(cb,"COMP sub-chunk id=%08x",(unsigned)f->GetCurrentID()); complog(cb); }
+#endif
         if(f->GetCurrentID() == P3D_COMPOSITE_DRAWABLE_SKIN_LIST)
         {
             long NumElements = f->GetLong();
@@ -457,6 +472,9 @@ tEntity* tCompositeDrawableLoader::LoadObject(tChunkFile* f, tEntityStore* store
                     f->GetPString(name);
                     isTranslucent = ((f->GetLong() == 0)?false:true);
                     skin = p3d::find<tDrawablePose>(store, name);
+#if defined(RAD_PSP)
+                    { char cb[300]; sprintf(cb,"COMP skin '%s' found=%d",name,(int)(skin!=0)); complog(cb); }
+#endif
                     if(skin)
                     {
                         tCompositeDrawable::DrawablePoseElement* compDrawSkin = compositeDraw->AddPose(skin);
@@ -484,7 +502,7 @@ tEntity* tCompositeDrawableLoader::LoadObject(tChunkFile* f, tEntityStore* store
 						rmt::Box3D skelBox;
 						skelBox.high.Set(-FLT_MAX, -FLT_MAX, -FLT_MAX);
 						skelBox.low.Set(FLT_MAX, FLT_MAX, FLT_MAX);
-						if(!p->IsPoseReady())
+						if(p && !p->IsPoseReady())
 						{
 							p->Evaluate();
 						}
@@ -510,6 +528,9 @@ tEntity* tCompositeDrawableLoader::LoadObject(tChunkFile* f, tEntityStore* store
 							}
 						}
 						rmt::Vector mid = skelBox.Mid();
+#if defined(RAD_PSP)
+						complog("COMP: skin bbox done");
+#endif
 
                         compositeDraw->boundingBox.high.x = rmt::Max( (skinBox.high.x + mid.x), (compositeDraw->boundingBox.high.x) );
                         compositeDraw->boundingBox.high.y = rmt::Max( (skinBox.high.y + mid.y), (compositeDraw->boundingBox.high.y) );
@@ -539,6 +560,7 @@ tEntity* tCompositeDrawableLoader::LoadObject(tChunkFile* f, tEntityStore* store
                 f->EndChunk();
             }
         }
+#if !defined(RAD_PSP)  // effects (EFX) are disabled on PSP -> skip effect list
         else  if(f->GetCurrentID() == P3D_COMPOSITE_DRAWABLE_EFFECT_LIST)
         {
             long NumElements = f->GetLong();
@@ -567,11 +589,14 @@ tEntity* tCompositeDrawableLoader::LoadObject(tChunkFile* f, tEntityStore* store
                         // Compute the overall bounding box for the CompositeDrawable
                         //
                         rmt::Box3D effectBox;
+#if defined(RAD_PSP)
+                        { char cb[200]; sprintf(cb,"COMP pre effect GetBBox '%s' effect=%d skelID=%ld",name,(int)(effect!=0),skeletonID); complog(cb); }
+#endif
                         effect->GetBoundingBox(&effectBox);
                         rmt::Matrix effectMatrix;
                         effectMatrix.Identity();
-                        tSkeleton::Joint* effectJoint = skeleton->GetJoint(skeletonID);
-                        effectMatrix.Mult(effectJoint->worldMatrix);
+                        tSkeleton::Joint* effectJoint = skeleton ? skeleton->GetJoint(skeletonID) : 0;
+                        if(effectJoint) effectMatrix.Mult(effectJoint->worldMatrix); else complog("EFFECT: null joint (skipped)");
 
                         effectMatrix.Transform(effectBox.low, &effectBox.low);
                         effectMatrix.Transform(effectBox.high, &effectBox.high);
@@ -623,6 +648,7 @@ tEntity* tCompositeDrawableLoader::LoadObject(tChunkFile* f, tEntityStore* store
                 f->EndChunk();
             }
         }
+#endif
         else if(f->GetCurrentID() == P3D_COMPOSITE_DRAWABLE_PROP_LIST)
         {
             long NumElements = f->GetLong();
@@ -651,11 +677,14 @@ tEntity* tCompositeDrawableLoader::LoadObject(tChunkFile* f, tEntityStore* store
                         // Compute the overall bounding box for the CompositeDrawable
                         //
                         rmt::Box3D propBox;
+#if defined(RAD_PSP)
+                        { char cb[200]; sprintf(cb,"COMP pre prop GetBBox '%s' prop=%d skelID=%ld",name,(int)(prop!=0),skeletonID); complog(cb); }
+#endif
                         prop->GetBoundingBox(&propBox);
                         rmt::Matrix propMatrix;
                         propMatrix.Identity();
-                        tSkeleton::Joint* propJoint = skeleton->GetJoint(skeletonID);
-                        propMatrix.Mult(propJoint->worldMatrix);
+                        tSkeleton::Joint* propJoint = skeleton ? skeleton->GetJoint(skeletonID) : 0;
+                        if(propJoint) propMatrix.Mult(propJoint->worldMatrix); else complog("PROP: null joint (skipped)");
 
                         propMatrix.Transform(propBox.low, &propBox.low);
                         propMatrix.Transform(propBox.high, &propBox.high);
@@ -708,7 +737,27 @@ tEntity* tCompositeDrawableLoader::LoadObject(tChunkFile* f, tEntityStore* store
                 f->EndChunk();
             }
         }
+#if defined(RAD_PSP)
+        { char cb[64]; sprintf(cb,"COMP pre-outerEndChunk id=%08x",(unsigned)f->GetCurrentID()); complog(cb); }
+#endif
         f->EndChunk();
+#if defined(RAD_PSP)
+        complog("COMP post-outerEndChunk");
+#endif
+    }
+
+#if defined(RAD_PSP)
+    { char cb[160]; sprintf(cb,"COMP loop-exit bbox hi=(%g,%g,%g) lo=(%g,%g,%g)",compositeDraw->boundingBox.high.x,compositeDraw->boundingBox.high.y,compositeDraw->boundingBox.high.z,compositeDraw->boundingBox.low.x,compositeDraw->boundingBox.low.y,compositeDraw->boundingBox.low.z); complog(cb); }
+#endif
+    // An empty composite (no skins/props/effects resolved -- e.g. an
+    // effect-only prop whose effects are disabled on PSP) leaves the bounding
+    // box at its +/-FLT_MAX init. The sphere radius below is Magnitude() of a
+    // +/-FLT_MAX vector, which overflows to inf and faults on real hardware
+    // (PPSSPP tolerates it). Collapse a degenerate/empty box to a zero box.
+    if( compositeDraw->boundingBox.high.x < compositeDraw->boundingBox.low.x )
+    {
+        compositeDraw->boundingBox.high.Set( 0.0f, 0.0f, 0.0f );
+        compositeDraw->boundingBox.low.Set( 0.0f, 0.0f, 0.0f );
     }
 
     // really hacky sphere 
@@ -720,6 +769,9 @@ tEntity* tCompositeDrawableLoader::LoadObject(tChunkFile* f, tEntityStore* store
     compositeDraw->boundingSphere.radius = v.Magnitude();
 
     compositeDraw->translucentObjects.SetSize(numTranslucentElements);
+#if defined(RAD_PSP)
+    complog("COMP: done");
+#endif
 
     return(compositeDraw);
 }

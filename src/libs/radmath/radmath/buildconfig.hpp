@@ -14,7 +14,7 @@
 #endif
 
 // check that we have a valid platform define
-#if !defined(RAD_UWP) && !defined(RAD_WIN32) && !defined(RAD_LINUX)
+#if !defined(RAD_UWP) && !defined(RAD_WIN32) && !defined(RAD_LINUX) && !defined(RAD_PSP)
 #error No platform define, define one of RAD_UWP, RAD_WIN32 or RAD_LINUX 
 #endif
 

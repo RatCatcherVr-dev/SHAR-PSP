@@ -4,6 +4,7 @@
 
 #include <radload/manager.hpp>
 #include <string.h>
+#include <stdio.h>
 #include <radload/utility/hashtable.hpp>
 #include <radload/utility/queue.hpp>
 #include <radfile.hpp>
@@ -168,14 +169,23 @@ radLoadFileLoader* radLoadManager::GetFileLoader( const char* extension )
     return m_pFileLoaders->Find( radMakeCaseInsensitiveKey( ext ) );
 }
 
+// PSP diagnostic log for the load worker thread.
+static void llog(const char* s)
+{
+    FILE* f = fopen("ms0:/shar_load.log", "a");
+    if (f) { fputs(s, f); fputc('\n', f); fclose(f); }
+}
+
 void radLoadManager::InternalService()
 {
+    llog("loadthread: entered");
     m_pMutex->Lock();
 
     while( !m_bDone )
     {
         if( !m_pLoadQueue->Empty() )
         {
+            llog("loadthread: queue non-empty, popping");
             radLoadObject* obj = m_pLoadQueue->Pop();
             radLoadCallback* callback = dynamic_cast<radLoadCallback*>( obj );
             if( callback )
@@ -210,12 +220,23 @@ void radLoadManager::InternalService()
                     i++;
 
                     radLoadFileLoader* loader = m_pFileLoaders->Find( radMakeCaseInsensitiveKey( filename + i ) );
-                    rAssert( loader );
-                    radMemoryAllocator old = ::radMemorySetCurrentAllocator (item->GetOptions()->allocator);
-
-                    loader->LoadFile( item->GetOptions(), static_cast<radLoadUpdatableRequest*>( item ) );
-                    
-                    ::radMemorySetCurrentAllocator (old);
+                    if( loader == NULL )
+                    {
+                        // No file loader registered for this extension. Skipping
+                        // the load (rather than dereferencing a NULL loader and
+                        // crashing) leaves the resource unresolved but keeps the
+                        // engine alive — the caller just gets a NULL from the
+                        // inventory later.
+                        FILE* f = fopen("ms0:/shar_load.log", "a");
+                        if (f) { fprintf(f, "NO LOADER for '%s' (ext '%s') - skipping\n", filename, filename + i); fclose(f); }
+                    }
+                    else
+                    {
+                        radMemoryAllocator old = ::radMemorySetCurrentAllocator (item->GetOptions()->allocator);
+                        loader->LoadFile( item->GetOptions(), static_cast<radLoadUpdatableRequest*>( item ) );
+                        llog("loadthread: LoadFile returned");
+                        ::radMemorySetCurrentAllocator (old);
+                    }
                     if( m_pCurrent->GetState() == LOADING )
                     {
                         m_pCurrent->SetState( COMPLETE );

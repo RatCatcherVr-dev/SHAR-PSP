@@ -27,6 +27,11 @@
 #include <p3d/utility.hpp>
 #include "utility/debugmessages.h"
 #include "string.h"
+#if defined(RAD_PSP)
+#include <stdio.h>
+#include <typeinfo>
+#include <radtime.hpp>
+#endif
 
 
 FeOwner::FeOwner( const tName& name ) : 
@@ -80,8 +85,21 @@ void FeOwner::DisplayChildren()
 {
     tLinearTable::RawIterator iter(mChildren);
     FeDrawable *drawable = dynamic_cast<FeDrawable*>( iter.First() );
+#if defined(RAD_PSP)
+    extern int g_pspDiagFrame;   // set by harness on the first menu frames
+    int di = 0;
+#endif
     while (drawable)
     {
+#if defined(RAD_PSP)
+        if( g_pspDiagFrame >= 0 )
+        {
+            FILE* f = fopen("ms0:/shar_draw.log","a");
+            if(f){ fprintf(f,"mf%d child %d: %s vis=%d\n", g_pspDiagFrame, di,
+                   typeid(*drawable).name(), (int)drawable->IsVisible()); fclose(f); }
+            di++;
+        }
+#endif
         drawable->Display();
         drawable = dynamic_cast<FeDrawable*>( iter.Next() );
     }
@@ -120,6 +138,13 @@ void FeOwner::Display()
         {
             FeDrawable* drawable = static_cast< FeDrawable* >( feEntity );
             rAssert( drawable );
+#if defined(RAD_PSP)
+            { extern int g_pspDiagFrame; static int s_dl=0;
+              if(g_pspDiagFrame>=0 && s_dl<3000){ FILE* df=fopen("ms0:/shar_draw.log","a");
+                if(df){ fprintf(df,"disp i=%d '%s' [%s] vis=%d\n", i,
+                        drawable->GetName()?drawable->GetName():"?",
+                        typeid(*drawable).name(), (int)drawable->IsVisible()); fclose(df);} s_dl++; } }
+#endif
 
             if( drawable->IsVisible() )
             {

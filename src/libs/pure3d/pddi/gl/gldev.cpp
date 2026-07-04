@@ -76,6 +76,22 @@ int pglDevice::GetDisplayInfo(pddiDisplayInfo** info)
         return nDisplays;
     }
 
+#if defined(RAD_PSP)
+    // PSP has a single fixed framebuffer; no SDL display enumeration.
+    nDisplays = 1;
+    displayInfo = new pddiDisplayInfo[1];
+    displayInfo[0].id = 0;
+    strcpy(displayInfo[0].description, "PSP");
+    displayInfo[0].pci = 0;
+    displayInfo[0].vendor = 0;
+    displayInfo[0].fullscreenOnly = true;
+    displayInfo[0].caps = 0;
+    displayInfo[0].modeInfo = new pddiModeInfo[1];
+    displayInfo[0].modeInfo[0].width = 480;
+    displayInfo[0].modeInfo[0].height = 272;
+    displayInfo[0].modeInfo[0].bpp = 32;
+    displayInfo[0].nDisplayModes = 1;
+#else
     int totalDisplay = SDL_GetNumVideoDisplays();
     displayInfo = new pddiDisplayInfo[totalDisplay];
 
@@ -99,6 +115,7 @@ int pglDevice::GetDisplayInfo(pddiDisplayInfo** info)
         displayInfo[nDisplays].modeInfo = displayInfo[nDisplays].modeInfo;
         nDisplays++;
     }
+#endif
 
     return nDisplays;
 }

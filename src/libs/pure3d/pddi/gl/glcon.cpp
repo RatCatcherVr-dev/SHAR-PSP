@@ -12,6 +12,9 @@
 #include <pddi/base/debug.hpp>
 #include <math.h>
 #include <string.h>
+#if defined(RAD_PSP)
+#include <radmemory.hpp>
+#endif
 #include <SDL2/SDL.h>
 
 #include <microprofile.h>
@@ -98,16 +101,33 @@ pglContext::~pglContext()
     device->Release();
 }
 
+// PSP diagnostic log for the GL/render path (main thread).
+#if defined(RAD_PSP)
+#include <stdio.h>
+static void gllog(const char* s)
+{
+    FILE* f = fopen("ms0:/shar_gl.log", "a");
+    if (f) { fputs(s, f); fputc('\n', f); fclose(f); }
+}
+#else
+static inline void gllog(const char*) {}
+#endif
+
 // frame synchronisation
 void pglContext::BeginFrame()
 {
+    gllog("BeginFrame enter");
     pddiBaseContext::BeginFrame();
+    gllog("after pddiBase::BeginFrame");
 
+#if !defined(RAD_PSP)
     SDL_GL_SetSwapInterval(display->GetForceVSync() ? 1 : 0);
+#endif
 
     if(display->HasReset())
     {
         contextID++;
+        gllog("HasReset: starting GL state init");
 
         glEnableClientState(GL_VERTEX_ARRAY);
         glEnable(GL_CULL_FACE);
@@ -115,13 +135,16 @@ void pglContext::BeginFrame()
         glColor4f(1,1,1,1);
 
         glEnable(GL_DITHER);
+        gllog("after glEnable(GL_DITHER)");
 
         if(display->CheckExtension("GL_EXT_separate_specular_color"))
         {
             glLightModeli(GL_LIGHT_MODEL_COLOR_CONTROL, GL_SEPARATE_SPECULAR_COLOR);
         }
 
+        gllog("pre-SyncState");
         SyncState(0xffffffff);
+        gllog("post-SyncState");
     }
 
     glMatrixMode( GL_MODELVIEW );
@@ -131,6 +154,7 @@ void pglContext::BeginFrame()
     glLoadIdentity();
 
     glMatrixMode( GL_MODELVIEW );
+    gllog("BeginFrame exit");
 }
 
 void pglContext::EndFrame()
@@ -315,6 +339,10 @@ pddiPrimStream* pglContext::BeginPrims(pddiShader* mat, pddiPrimType primType, u
         mat = defaultShader;
 
     pddiBaseContext::BeginPrims(mat, primType, vertexType, vertexCount);
+#if defined(RAD_PSP)
+    extern int g_pspDrawStream;
+    g_pspDrawStream++;
+#endif
     pddiBaseShader* material = (pddiBaseShader*)mat;
     ADD_STAT(PDDI_STAT_MATERIAL_OPS, !material->IsCurrent());
     material->SetMaterial();
@@ -680,11 +708,113 @@ protected:
 };
 */
 
+#if defined(RAD_PSP)
+// Per-frame render stats for PSP profiling (read+reset by the harness).
+int g_pspDrawBuffer = 0;   // DrawPrimBuffer (VBO) calls
+int g_pspDrawStream = 0;   // BeginPrims (immediate-mode) calls
+
+//===========================================================================
+// Room-backdrop cache (PSP menu perf)
+//===========================================================================
+// The frontend menu's 3D room (camset) is ~280 meshes -> ~1.6 fps live. It is
+// static, so we render it ONCE, copy the framebuffer into a texture, and then
+// draw that texture as a full-screen backdrop each frame while only the
+// animated objects (Homer) draw live over it. This drops ~280 draw calls to 1.
+static GLuint s_backdropTex   = 0;
+static bool   s_backdropReady = false;
+static int    s_backdropW     = 0;
+static int    s_backdropH     = 0;
+static int    s_backdropTexDim = 512;   // pow2 texture that holds the 480x272 grab
+
+// Copy the current framebuffer (the freshly-rendered room) into the backdrop
+// texture. Called once, right after the room has been drawn.
+extern "C" void pglCaptureRoomBackdrop(void)
+{
+    GLint vp[4] = {0,0,480,272};
+    glGetIntegerv(GL_VIEWPORT, vp);
+    s_backdropW = vp[2];
+    s_backdropH = vp[3];
+    int w = s_backdropW, h = s_backdropH;
+
+    // pspGL has no glCopyTexSubImage2D, so read the framebuffer into RAM and
+    // upload it into the (pow2) backdrop texture. RGBA throughout (GL ES on PSP
+    // wants internalformat == format).
+    int rbytes = w * h * 4;
+    unsigned char* buf = (unsigned char*)radMemoryAllocAligned(radMemoryGetCurrentAllocator(), rbytes, 16);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, buf);
+
+    if( s_backdropTex == 0 )
+    {
+        glGenTextures(1, &s_backdropTex);
+        glBindTexture(GL_TEXTURE_2D, s_backdropTex);
+        int tbytes = s_backdropTexDim * s_backdropTexDim * 4;
+        unsigned char* zero = (unsigned char*)radMemoryAllocAligned(radMemoryGetCurrentAllocator(), tbytes, 16);
+        memset(zero, 0, tbytes);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, s_backdropTexDim, s_backdropTexDim, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, zero);
+        radMemoryFreeAligned(zero);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    glBindTexture(GL_TEXTURE_2D, s_backdropTex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, buf);
+    radMemoryFreeAligned(buf);
+
+    s_backdropReady = true;
+    { FILE* f = fopen("ms0:/shar_fe.log","a");
+      if(f){ fprintf(f,"backdrop captured %dx%d tex=%u err=%x\n",
+             w, h, (unsigned)s_backdropTex, (unsigned)glGetError()); fclose(f);} }
+}
+
+bool pglRoomBackdropReady(void) { return s_backdropReady; }
+
+// Draw the cached room as a full-screen quad (no depth) as the frame background.
+extern "C" void pglDrawRoomBackdrop(void)
+{
+    if( !s_backdropReady ) return;
+
+    float u = (float)s_backdropW / (float)s_backdropTexDim;
+    float v = (float)s_backdropH / (float)s_backdropTexDim;
+
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
+    glOrtho(0.0, 1.0, 0.0, 1.0, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);  glPushMatrix(); glLoadIdentity();
+
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_LIGHTING);
+    glDisable(GL_BLEND);
+    glDisable(GL_ALPHA_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, s_backdropTex);
+    glColor4ub(255,255,255,255);
+
+    // framebuffer origin is bottom-left, same as ortho, so no V flip.
+    glBegin(GL_TRIANGLE_STRIP);
+        glTexCoord2f(0.0f, 0.0f); glVertex2f(0.0f, 0.0f);
+        glTexCoord2f(u,    0.0f); glVertex2f(1.0f, 0.0f);
+        glTexCoord2f(0.0f, v);    glVertex2f(0.0f, 1.0f);
+        glTexCoord2f(u,    v);    glVertex2f(1.0f, 1.0f);
+    glEnd();
+
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);  glPopMatrix();
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    // material state (texture/blend/light) is re-set per draw by SetMaterial.
+}
+#endif
+
 void pglContext::DrawPrimBuffer(pddiShader* mat, pddiPrimBuffer* buffer)
 {
     if(!mat)
         mat = defaultShader;
-
+#if defined(RAD_PSP)
+    g_pspDrawBuffer++;
+#endif
     pddiBaseShader* material = (pddiBaseShader*)mat;
     ADD_STAT(PDDI_STAT_MATERIAL_OPS, !material->IsCurrent());
     material->SetMaterial();

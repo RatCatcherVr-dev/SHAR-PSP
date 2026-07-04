@@ -563,6 +563,17 @@ tSpriteLoader::~tSpriteLoader()
     delete imageFactory;
 }
 
+#if defined(RAD_PSP)
+#include <stdio.h>
+#include <string.h>
+#include <pspsysmem.h>
+static void splog(const char* s) { FILE* f = fopen("ms0:/shar_sprite.log","a"); if(f){fputs(s,f);fputc('\n',f);fclose(f);} }
+static unsigned spFreeMem() { return sceKernelTotalFreeMemSize(); }
+#else
+static inline void splog(const char*) {}
+static inline unsigned spFreeMem() { return 0; }
+#endif
+
 //------------------------------------------------------------------------
 tEntity* tSpriteLoader::LoadObject(tChunkFile* f, tEntityStore* store)
 {
@@ -576,7 +587,7 @@ tEntity* tSpriteLoader::LoadObject(tChunkFile* f, tEntityStore* store)
     int imageCount;
     tImage* image = NULL;
     tTexture** images = NULL;
-        
+
     f->GetPString(name);
     nativeX = f->GetLong();
     nativeY = f->GetLong();
@@ -585,6 +596,20 @@ tEntity* tSpriteLoader::LoadObject(tChunkFile* f, tEntityStore* store)
     imageHeight = f->GetLong();
     imageCount = f->GetLong();
     blitBorder = f->GetLong();
+    { char b[300]; sprintf(b,"sprite '%s' %dx%d n=%d border=%d  freeKB=%u", name, imageWidth, imageHeight, imageCount, blitBorder, spFreeMem()/1024); splog(b); }
+
+#if defined(RAD_PSP)
+    // PSP memory workaround: the PC frontend.p3d bundles the entire collectible
+    // "card" set (~50 sprites, each 12 images ≈230KB → ~11MB of 32-bit texels),
+    // which exhausts PSP RAM during load. The main menu never shows these, so
+    // skip them. Returning NULL here is safe: the caller's EndChunk() seeks past
+    // the skipped sprite's image data, keeping the chunk stream aligned.
+    if ( strncmp( name, "card", 4 ) == 0 )
+    {
+        splog("  -> skipped (PSP memory: collectible card)");
+        return NULL;
+    }
+#endif
 
     int count = 0;
     if ((imageCount>1) || blitBorder)
@@ -606,9 +631,16 @@ tEntity* tSpriteLoader::LoadObject(tChunkFile* f, tEntityStore* store)
                       if (images)
                       {
                           tTexture* texture = LoadTexture(f, 32);
-                          
+
                           images[count] = texture;
-                          images[count]->AddRef();
+                          if (texture)   // guard: a failed/unhandled tile must not NULL-deref
+                          {
+                              images[count]->AddRef();
+                          }
+                          else
+                          {
+                              splog("  LoadTexture returned NULL - tile skipped");
+                          }
                           count++;
                       }
                       else
@@ -664,6 +696,8 @@ tImage* tSpriteLoader::LoadImage(tChunkFile* f, int depth /*=32*/)
     bool alpha = f->GetLong() == 1;
     unsigned format = f->GetLong();
 
+    { char b[256]; sprintf(b,"  image '%s' %dx%d bpp=%d pal=%d alpha=%d fmt=%u", name, width, height, bpp, (int)palettized, (int)alpha, format); splog(b); }
+
     imageFactory->SetDesiredDepth(bpp);
 
     while(f->ChunksRemaining())
@@ -714,6 +748,8 @@ tTexture* tSpriteLoader::LoadTexture(tChunkFile* f, int depth /*=32*/)
     bool palettized = f->GetLong() == 1;
     bool alpha = f->GetLong() == 1;
     unsigned format = f->GetLong();
+
+    { char b[256]; sprintf(b,"  image '%s' %dx%d bpp=%d pal=%d alpha=%d fmt=%u", name, width, height, bpp, (int)palettized, (int)alpha, format); splog(b); }
 
     imageFactory->SetDesiredDepth(bpp);
     switch(format)

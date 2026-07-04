@@ -355,6 +355,21 @@ void FeResourceManager::ContinueLoading()
     for( i = 0; i < mResources.Size(); i++ )
     {
         ResourceEntry* resource = mResources[ i ];
+#if defined(RAD_PSP)
+        {
+            extern int g_pspDiagFrame;   // >=0 on the first menu frames (harness)
+            static int s_clLines = 0;
+            if( g_pspDiagFrame >= 0 && s_clLines < 4000 )
+            {
+                FILE* cf = fopen("ms0:/shar_cl.log","a");
+                if(cf){ fprintf(cf,"CL i=%d/%d %s st=%d ty=%d\n", i, mResources.Size(),
+                        resource ? resource->GetName() : "(null)",
+                        resource ? (int)resource->m_Status : -1,
+                        resource ? (int)resource->m_type : -1 ); fclose(cf); }
+                s_clLines++;
+            }
+        }
+#endif
         if( resource )
         {
             if( resource->m_Status == RM_LOAD_COMPLETE )
@@ -394,6 +409,27 @@ void FeResourceManager::ContinueLoading()
                         }
                     }
                 }
+
+#if defined(RAD_PSP)
+                // RT_IMAGE resources are referenced by full path (e.g.
+                // "art/frontend/scrooby/resource/images/tvframe.png") but the
+                // matching sprite loaded from frontend.p3d is named by BASENAME
+                // ("tvframe.png"). Resolve by basename so we use the embedded
+                // sprite instead of trying to open a non-existent external file
+                // (which then crashes the PNG decoder on the failed/empty read).
+                if( entity == NULL )
+                {
+                    const char* full = resource->GetName();
+                    const char* base = full;
+                    for( const char* p = full; *p; ++p )
+                        if( *p == '/' || *p == '\\' ) base = p + 1;
+                    if( base != full )
+                    {
+                        p3d::inventory->SelectSection( m_pInventorySection );
+                        entity = p3d::find<tEntity>( base );
+                    }
+                }
+#endif
 
                 p3d::inventory->PopSection();
                 p3d::inventory->SetCurrentSectionOnly( currentSectionOnly );
@@ -441,6 +477,104 @@ void FeResourceManager::ContinueLoading()
                 {
                     if( mResources[i]->m_Status == RM_NOT_LOADED )
                     {
+#if defined(RAD_PSP)
+                        // NOTE: RT_P3D_OBJECT (the menu's 3D room-scene files:
+                        // camset, homer, gag*, glow*, racecar, TVscreen) are now
+                        // loaded — the animation subsystem and the camera/light/
+                        // billboard/multicontroller loaders are registered, so
+                        // these parse and render. A per-resource attempt counter
+                        // below skips any single file that fails to resolve so a
+                        // bad file can't block the whole project load.
+                        if( mResources[i]->m_type == RT_IMAGE )
+                        {
+                            // RT_IMAGE resources are sprites embedded in
+                            // frontend.p3d, resolved from the inventory by
+                            // name/basename above. Reaching here means it wasn't
+                            // found — the sprite was skipped (e.g. cards) or the
+                            // external file is absent. Skip rather than load a
+                            // missing file (crashes the PNG decoder) or spin
+                            // forever waiting on a load that never resolves.
+                            mResources[i]->m_Status = RM_LOAD_COMPLETE;
+                            continue;
+                        }
+                        if( mResources[i]->m_type == RT_P3D_OBJECT )
+                        {
+                            // The menu shows Homer (gaghomer) doing a gag in the
+                            // room; the other characters' gag files (mole, frink,
+                            // barney, snake, nick, grandpa) are alternates the
+                            // stock frontend swaps in on other menu states. On PSP
+                            // we skip them — loading all seven full character
+                            // composites at once (each ~90-140 KB of file, far
+                            // more expanded in RAM: skeleton + 6 skins + meshes +
+                            // textures) exhausts the heap before camset even
+                            // loads. Keeping just gaghomer renders the visible
+                            // scene within budget.
+                            const char* full = mResources[i]->GetName();
+                            const char* base = full;
+                            for( const char* p = full; *p; ++p )
+                                if( *p == '/' || *p == '\\' ) base = p + 1;
+                            // Skip the alternate character gags (keep gaghomer),
+                            // and skip the base homer.p3d — the menu also loads
+                            // gaghomer (the animated Homer gag) at the same spot,
+                            // so loading both draws two Homers. gaghomer is the
+                            // one we want animated.
+                            // MEMORY BUDGET (real PSP, ~16 MB user heap on this
+                            // CFW+plugins config): the full frontend enumerates
+                            // ~569 resources and the 3D scene set alone is ~12 MB
+                            // of .p3d (expanded far larger in RAM) — it OOMs at
+                            // ~15 MB mid-load and hard-powers-off. The main menu
+                            // only shows ONE room + the animated Homer + glows +
+                            // the TV + the iris wipe. Everything else (extra
+                            // room variants, level-select maps, reward/podium
+                            // screens, alternate characters, collectible cards)
+                            // belongs to other frontend screens we don't run, so
+                            // skip loading it. This is the fix for the OOM
+                            // power-off, not just a per-file workaround.
+                            //
+                            // The dominant cost is FOUR ~2.2 MB camset variants
+                            // (camset / _C / _H / _T ≈ 9 MB) — keep only the base
+                            // camset.p3d the menu's CamAndSet uses.
+                            bool skipHeavy =
+                                // camset.p3d (incl. variants): the animated 3D room-scene background.
+                                // Its parse HANGS the async load thread on PSP -- LoadFile never returns,
+                                // so no further resource loads and the project never completes (menu never
+                                // appears). Confirmed with BOTH optimized and pristine-original camset, so
+                                // it is a pre-existing parser hang, not an asset problem. Skip loading it so
+                                // the 2D menu comes up; the 3D background stays off until the hang is fixed.
+                                ( strncmp( base, "camset", 6 ) == 0 &&
+                  strcmp ( base, "camset.p3d" ) != 0 ) ||
+                                // extra Homer skins (keep the animated gaghomer)
+                                strncmp( base, "homer_", 6 ) == 0 ||
+                                // other characters the main menu doesn't show
+                                strcmp( base, "maggie.p3d" )  == 0 ||
+                                // level-select preview maps (l1hudmap..l7hudmap)
+                                strstr( base, "hudmap" ) != NULL ||
+                                // reward / podium / level-select screen dressing
+                                strncmp( base, "reward",  6 ) == 0 ||
+                                strncmp( base, "curtain", 7 ) == 0 ||
+                                strcmp( base, "podium.p3d" )   == 0 ||
+                                strcmp( base, "pedestal.p3d" ) == 0 ||
+                                strcmp( base, "sparkles.p3d" ) == 0;
+
+                            bool skip = ( strncmp( base, "gag", 3 ) == 0 &&
+                                          strcmp( base, "gaghomer.p3d" ) != 0 ) ||
+                                        strcmp( base, "homer.p3d" ) == 0 ||
+                                        // Collectible-card effects (cardsfx.p3d,
+                                        // card*.p3d). The menu never shows cards
+                                        // (their sprites are already skipped as
+                                        // RT_IMAGE above), but cardsfx.p3d was
+                                        // still being loaded as an RT_P3D_OBJECT.
+                                        strncmp( base, "card", 4 ) == 0 ||
+                                        skipHeavy;
+                            if( skip )
+                            {
+                                FILE* rf = fopen("ms0:/shar_rm.log","a");
+                                if(rf){ fprintf(rf,"skipping scene object: %s\n", base); fclose(rf); }
+                                mResources[i]->m_Status = RM_LOAD_COMPLETE;
+                                continue;
+                            }
+                        }
+#endif
                         if( mResources[i]->m_type == RT_IMAGE )
                         {
                             // Grab any sort of image handler
@@ -497,6 +631,72 @@ void FeResourceManager::ContinueLoading()
 
                         p3d::context->GetLoadManager()->Load( request );
                     }
+#if defined(RAD_PSP)
+                    else if( mResources[i]->m_Status == RM_P3D_LOAD_IN_PROGRESS )
+                    {
+                        // A queued P3D-object load is still in progress (its
+                        // entity hasn't appeared in the inventory yet). Normally
+                        // we just wait (break). But if it has been in progress
+                        // for many passes it most likely failed to load (missing
+                        // file / parse error); skip it so the rest of the scene
+                        // and the project load can finish rather than hang here.
+                        //
+                        // The room scene (camset.p3d, 2.26 MB / several thousand
+                        // chunks) parses far slower than the small props, so the
+                        // awaited entity (m_inventoryName) can take well over the
+                        // old 600-pass window to appear — it was being skipped as
+                        // a false "timeout", leaving the menu's 3D background black.
+                        // Give big scenes room; the counter is just a hang backstop.
+                        int inv = 0;
+                        {
+                            p3d::inventory->PushSection();
+                            p3d::inventory->SelectSection( m_pInventorySection );
+                            const char* want = ( mResources[i]->m_inventoryName == "" )
+                                             ? mResources[i]->GetName()
+                                             : (const char*)mResources[i]->m_inventoryName;
+                            inv = ( p3d::find<tEntity>( want ) != NULL );
+                            p3d::inventory->PopSection();
+                        }
+                        // A resource whose awaited inventory name is itself a ".p3d" file (the
+                        // project's own frontend.p3d gets queued as a resource) can NEVER resolve
+                        // to an entity of that name: the file streams its contents and registers
+                        // entities under their own names, never "frontend.p3d". Waiting the full
+                        // timeout on that phantom just stalls the whole project load. Give the
+                        // async parse a short grace to add its child resources, then stop waiting.
+                        {
+                            const char* wnm = ( mResources[i]->m_inventoryName == "" )
+                                            ? mResources[i]->GetName()
+                                            : (const char*)mResources[i]->m_inventoryName;
+                            size_t wl = wnm ? strlen( wnm ) : 0;
+                            if( wl >= 4 && wnm[wl-4] == '.' &&
+                                (wnm[wl-3]=='p'||wnm[wl-3]=='P') && wnm[wl-2]=='3' &&
+                                (wnm[wl-1]=='d'||wnm[wl-1]=='D') &&
+                                mResources[i]->m_pspLoadAttempts > 150 )
+                            {
+                                FILE* rf = fopen("ms0:/shar_rm.log","a");
+                                if(rf){ fprintf(rf,"P3D skip (file-name resource, no such entity): %s\n", wnm); fclose(rf); }
+                                mResources[i]->m_Status = RM_LOAD_COMPLETE;
+                                continue;
+                            }
+                        }
+                        if( (mResources[i]->m_pspLoadAttempts % 200) == 0 )
+                        {
+                            FILE* rf = fopen("ms0:/shar_rm.log","a");
+                            if(rf){ fprintf(rf,"P3D in-progress pass %d: %s want='%s' found=%d\n",
+                                    mResources[i]->m_pspLoadAttempts, mResources[i]->GetName(),
+                                    (mResources[i]->m_inventoryName == "") ? mResources[i]->GetName()
+                                        : (const char*)mResources[i]->m_inventoryName, inv); fclose(rf); }
+                        }
+                        if( ++mResources[i]->m_pspLoadAttempts > 6000 )
+                        {
+                            FILE* rf = fopen("ms0:/shar_rm.log","a");
+                            if(rf){ fprintf(rf,"P3D load timed out, skipping: %s\n",
+                                    mResources[i]->GetName()); fclose(rf); }
+                            mResources[i]->m_Status = RM_LOAD_COMPLETE;
+                            continue;
+                        }
+                    }
+#endif
 
                     // We don't want to let any other files get queued up until this one is done
                     break;
@@ -510,6 +710,50 @@ void FeResourceManager::ContinueLoading()
     }
 
     ::radMemorySetCurrentAllocator( old );
+
+#if defined(RAD_PSP)
+    // The project-load-complete signal normally rides on the dummy
+    // RT_PROJECT_LOAD_CALLBACK load's P3DCallback::Done() firing through
+    // radLoad. In the standalone harness that callback bridge does not fire, so
+    // detect completion here: once every resource is loaded (mCallbackID is
+    // still set until then), fire the same two callbacks the dummy load would —
+    // GetCallback()->OnResourceLoadComplete() (clears FeProject::mIsLoading so
+    // the screen finally draws) and ProjectLoadComplete().
+    if( m_pLoadingProject && mCallbackID != 0 )
+    {
+        bool allDone = true;
+        int nComplete = 0, nTotal = 0;
+        const char* pending = NULL;
+        for( int k = 0; k < mResources.Size(); k++ )
+        {
+            if( mResources[k] )
+            {
+                nTotal++;
+                if( mResources[k]->m_Status == RM_LOAD_COMPLETE ) nComplete++;
+                else { allDone = false; if(!pending) pending = mResources[k]->GetName(); }
+            }
+        }
+        {
+            static int s_last = -1;
+            if( nComplete != s_last )
+            {
+                s_last = nComplete;
+                FILE* rf = fopen("ms0:/shar_rm.log","a");
+                if(rf){ fprintf(rf,"resources %d/%d complete; pending='%s'\n",
+                        nComplete, nTotal, pending ? pending : "(none)"); fclose(rf); }
+            }
+        }
+        if( allDone )
+        {
+            { FILE* rf = fopen("ms0:/shar_rm.log","a"); if(rf){ fprintf(rf,"ALL DONE -> firing project complete\n"); fclose(rf);} }
+            if( GetCallback() )
+            {
+                GetCallback()->OnResourceLoadComplete();
+            }
+            ProjectLoadComplete();   // clears mCallbackID -> fires once
+        }
+    }
+#endif
 }
 
 //===========================================================================

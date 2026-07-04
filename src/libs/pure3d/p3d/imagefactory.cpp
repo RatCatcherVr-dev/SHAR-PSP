@@ -598,7 +598,10 @@ tImageFactory::tImageFactory() :
     AddHandler(new tBMPHandler);
     AddHandler(new tTargaHandler); 
     AddHandler(new tRawImageHandler);
-#if defined(RAD_WIN32) || defined(RAD_UWP)
+#if defined(RAD_WIN32) || defined(RAD_UWP) || defined(RAD_PSP)
+    // PSP has native S3TC/DXT support (gltex maps DXT1/3/5). GameCube-derived
+    // assets use DXT tiles, so the DXT handler must be registered or
+    // ParseAsTexture(IMG_DXT*) returns NULL -> crash in the sprite loader.
     AddHandler( new tDXTNHandler );
 #endif
 }

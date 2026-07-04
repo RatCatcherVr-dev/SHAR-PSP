@@ -183,7 +183,14 @@ void FeText::Display() //Override
 
         // render text outline
         //
+#if defined(RAD_PSP)
+        // Skip the 4-pass pseudo-outline on PSP: each pass re-lays-out and
+        // re-draws the whole string, ~5x-ing the text cost (the dominant
+        // per-frame CPU in the menu). Plain text is fine for the port.
+        if( false )
+#else
         if( mDisplayOutline )
+#endif
         {
             // TC: Text Pseudo-Outlining (just rendering 4 drop shadows around text)
             //

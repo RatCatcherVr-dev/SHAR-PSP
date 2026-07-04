@@ -10,6 +10,8 @@
     #include <p3d/platform/linux/plat_types.hpp>
 #elif defined(RAD_WIN32) || defined(RAD_UWP)
     #include <p3d/platform/win32/plat_types.hpp>
+#elif defined(RAD_PSP)
+    #include <p3d/platform/psp/plat_types.hpp>
 #endif
 
 #endif // _BASE_PLAT_TYPES_HPP

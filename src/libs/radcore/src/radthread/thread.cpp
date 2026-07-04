@@ -30,6 +30,17 @@
 #include "system.hpp"
 #include "thread.hpp"
 
+#include <stdio.h>
+#if defined(RAD_PSP)
+#include <pspthreadman.h>
+#endif
+// PSP diagnostic: trace thread creation/startup.
+static void tlog(const char* s, const void* p)
+{
+    FILE* f = fopen("ms0:/shar_thread.log", "a");
+    if (f) { fprintf(f, "%s %p\n", s, p); fclose(f); }
+}
+
 //=============================================================================
 // Local Definitions
 //=============================================================================
@@ -132,11 +143,19 @@ IRadThread* radThreadGetActiveThread( void )
 //------------------------------------------------------------------------------
 
 void radThreadSleep
-( 
+(
     unsigned int milliseconds
 )
 {
+#if defined(RAD_PSP)
+    // SDL_Delay(0) does not reliably yield to equal-priority threads on PSP,
+    // which starves cooperative spin-waiters (e.g. tFileFTT::WaitForCompletion
+    // waits for the radfile drive thread by spinning on radThreadSleep(0)).
+    // Force a real reschedule with a minimum non-zero delay.
+    sceKernelDelayThread( milliseconds ? milliseconds * 1000u : 100u );
+#else
     SDL_Delay( milliseconds );
+#endif
 }
 
 //=============================================================================
@@ -382,7 +401,13 @@ radThread::radThread
     // Create thread which then sets its own priority.
     //
     m_Priority = priority;
+#if defined(RAD_PSP)
+    // PSP's sceKernelCreateThread() rejects a NULL name, so SDL thread creation
+    // fails unless we pass one. (Desktop SDL is happy with NULL.)
+    m_ThreadHandle = SDL_CreateThreadWithStackSize(InternalThreadEntry, "radThread", stackSize, this);
+#else
     m_ThreadHandle = SDL_CreateThreadWithStackSize(InternalThreadEntry, /*name*/nullptr, stackSize, this);
+#endif
 
     //
     // Release our protection.
@@ -532,10 +557,12 @@ int radThread::InternalThreadEntry( void* param )
     // from callers function.   
     //
     radThread* pThread = (radThread*) param;
+    tlog("InternalThreadEntry: running, this=", (void*)pThread);
     pThread->m_ThreadId = SDL_ThreadID();
 
     // In SDL, thread priority can only be set on the current thread, so we do it here.
     pThread->SetPriority(pThread->m_Priority);
+    tlog("InternalThreadEntry: after SetPriority, this=", (void*)pThread);
 
     //
     // Under windows, convert this thread to a fiber.

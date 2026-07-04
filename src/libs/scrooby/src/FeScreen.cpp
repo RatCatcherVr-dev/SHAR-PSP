@@ -13,6 +13,7 @@
 // Includes
 //===========================================================================
 #include <p3d/matrixstack.hpp>
+#include <stdio.h>
 #include <p3d/utility.hpp>
 #include "FeScreen.h"
 #include "FeApp.h"
@@ -201,11 +202,20 @@ void FeScreen::Display()
 
     p3d::stack->Translate( -0.5f, -0.5f / aspect, 0.5f );
 
+#if defined(RAD_PSP)
+    { extern int g_pspDiagFrame; if(g_pspDiagFrame>=0){ FILE* sf=fopen("ms0:/shar_draw.log","a"); if(sf){ fputs("SCREEN: pre-Update\n",sf); fclose(sf);} } }
+#endif
     // update all screen objects
     FeOwner::Update( FeApp::GetInstance()->GetDeltaTime() );
 
+#if defined(RAD_PSP)
+    { extern int g_pspDiagFrame; if(g_pspDiagFrame>=0){ FILE* sf=fopen("ms0:/shar_draw.log","a"); if(sf){ fputs("SCREEN: pre-OwnerDisplay\n",sf); fclose(sf);} } }
+#endif
     // render all screen objects
     FeOwner::Display();
+#if defined(RAD_PSP)
+    { extern int g_pspDiagFrame; if(g_pspDiagFrame>=0){ FILE* sf=fopen("ms0:/shar_draw.log","a"); if(sf){ fputs("SCREEN: post-OwnerDisplay\n",sf); fclose(sf);} } }
+#endif
 
     p3d::stack->Pop();
     p3d::pddi->PopState( PDDI_STATE_RENDER );

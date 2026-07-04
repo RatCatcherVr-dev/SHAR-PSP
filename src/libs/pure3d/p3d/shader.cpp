@@ -144,7 +144,14 @@ tEntity* tShaderLoader::LoadObject(tChunkFile* f, tEntityStore* store)
                     {                        // try a global find.
                         tex = p3d::find<tTexture>(texName);
                     }
-                    
+#if defined(RAD_PSP)
+                    {
+                        FILE* tf = fopen("ms0:/shar_tex.log", "a");
+                        if (tf) { fprintf(tf, "shader '%s' texparam '%s' -> %s\n",
+                                          shaderName, texName, tex ? "RESOLVED" : "NULL"); fclose(tf); }
+                    }
+#endif
+
                     // nv:  If this shader uses the chainlink texture, I'm going to turn off mipmapping
                     if( strstr(texName, "chainlink") )
                     {

@@ -25,7 +25,7 @@
 // Build Configuration Check
 //=============================================================================
 
-#if !defined(RAD_UWP) && !defined(RAD_WIN32)
+#if !defined(RAD_UWP) && !defined(RAD_WIN32) && !defined(RAD_PSP)
     #error 'FTech requires definition of RAD_UWP, or RAD_WIN32'
 #endif
 
@@ -85,7 +85,7 @@ unsigned int radTimeGetMicroseconds( void );
 //
 // define 64 bit integer radTime64 for all platform
 //
-#if defined (RAD_WIN32) || defined(RAD_UWP)
+#if defined (RAD_WIN32) || defined(RAD_UWP) || defined(RAD_PSP)
 #include <cstdint>
 typedef uint64_t radTime64;
 #endif

@@ -59,6 +59,13 @@ protected:
     pddiLockInfo lock;
 
     char** bits;
+
+    // Native 8-bit paletted (CLUT) support: the pixel data stays 8-bit in
+    // system memory (4x less RAM than expanding to RGBA — critical for the
+    // frontend's hundreds of sprites), and SetGLState() expands through this
+    // palette into RGBA only at GL upload time.
+    pddiColour m_palette[256];
+    int        m_nPaletteEntries;
 };
 #endif
 

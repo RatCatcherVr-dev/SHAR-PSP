@@ -21,6 +21,10 @@
 #include "ResourceManager/FeResourceManager.h"
 #include <raddebug.hpp>
 #include <p3d/utility.hpp>
+#if defined(RAD_PSP)
+#include <radtime.hpp>
+#include <stdio.h>
+#endif
 #include <p3d/loadmanager.hpp>
 #include "feloaders.h"
 #include <fetextbible.h>
@@ -407,9 +411,30 @@ void FeApp::DrawFrame( float deltaTime )
         FeProject* feProject = dynamic_cast<FeProject*>(project);
         if( feProject )
         {
+#if defined(RAD_PSP)
+            // Drive resource loading EVERY frame regardless of whether the
+            // current project is loaded: the resource manager is a singleton
+            // shared by all projects, so this streams a *second* project's
+            // resources (e.g. frontend.p3d) in the background while the current
+            // project (e.g. the bootup loading screen) is displayed. Safe to
+            // call repeatedly; the harness pumps the IO via radFileService()/
+            // SwitchTask(). (m_bAsyncLoading is a mode flag, always true, so the
+            // stock guard never advances the load in the standalone harness.)
+            m_ResourceManager->ContinueLoading();
+            { extern int g_pspDiagFrame; if(g_pspDiagFrame>=0){ FILE*f=fopen("ms0:/shar_df.log","a"); if(f){ fputs("after ContinueLoading (returned)\n",f); fclose(f);} } }
+            { extern int g_pspDiagFrame; if(g_pspDiagFrame>=0){ FILE*f=fopen("ms0:/shar_df.log","a"); if(f){ fprintf(f,"IsLoaded=%d screen=%p\n",(int)feProject->IsLoaded(),(void*)project->GetCurrentScreen()); fclose(f);} } }
             if( feProject->IsLoaded() )
             {
-                m_DrawingFrame = true;        
+                m_DrawingFrame = true;
+            { extern int g_pspDiagFrame; if(g_pspDiagFrame>=0){ FILE*f=fopen("ms0:/shar_df.log","a"); if(f){ fputs("pre-Display\n",f); fclose(f);} } }
+                project->GetCurrentScreen()->Display();
+            { extern int g_pspDiagFrame; if(g_pspDiagFrame>=0){ FILE*f=fopen("ms0:/shar_df.log","a"); if(f){ fputs("post-Display (returned)\n",f); fclose(f);} } }
+                m_DrawingFrame = false;
+            }
+#else
+            if( feProject->IsLoaded() )
+            {
+                m_DrawingFrame = true;
                 project->GetCurrentScreen()->Display();
                 m_DrawingFrame = false;
             }
@@ -420,6 +445,7 @@ void FeApp::DrawFrame( float deltaTime )
                     m_ResourceManager->ContinueLoading();
                 }
             }
+#endif
         }
     }
     else

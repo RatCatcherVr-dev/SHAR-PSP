@@ -232,12 +232,21 @@ protected:
         ResourceType m_type;
         PascalCString m_inventoryName;
         tEntity* theData;
+#if defined(RAD_PSP)
+        // Counts ContinueLoading() passes a P3D-object load has been in progress
+        // without resolving, so a bad/missing scene file can be skipped instead
+        // of blocking the whole project load forever.
+        int m_pspLoadAttempts;
+#endif
 
         // Constructor.
         ResourceEntry():
             ResourceManagerEntryBase(),
             m_parent( NULL ),
             theData( NULL )
+#if defined(RAD_PSP)
+            , m_pspLoadAttempts( 0 )
+#endif
         {
         };
 

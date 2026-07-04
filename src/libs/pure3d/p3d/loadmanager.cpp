@@ -17,6 +17,7 @@
 #include <SDL2/SDL.h>
 
 #include <string.h>
+#include <stdio.h>
 
 #ifdef P3D_TRACK_LOAD_STATS
 #include <radmemory.hpp>
@@ -161,6 +162,13 @@ tLoadStatus  tP3DFileHandler::Load(tFile* file, tEntityStore* store)
         chunkFile->BeginChunk();
 
         tChunkHandler* h = static_cast<tChunkHandler*>(radLoad->GetDataLoader(chunkFile->GetCurrentID()));
+#if defined(RAD_PSP)
+        {
+            FILE* cf = fopen("ms0:/shar_chunks.log", "a");
+            if (cf) { fprintf(cf, "top chunk %08x  handler=%s\n",
+                              chunkFile->GetCurrentID(), h ? "yes" : "NO"); fclose(cf); }
+        }
+#endif
         if (h != NULL)
         {
             tLoadStatus status = h->Load(chunkFile, store);

@@ -127,9 +127,16 @@ protected:
     friend class tPrimGroupLoader;
 
     int mIndexCount;
-    
+
     unsigned short *mIndices;
     tVertexList    *mVertexList;
+
+#if defined(RAD_PSP)
+    // Cached VBO built lazily on first Display() from mVertexList/mIndices, so
+    // the mesh isn't re-submitted via immediate-mode glBegin/glVertex3f every
+    // frame (murder on PSP for many-mesh scenes). NULL until built.
+    class pddiPrimBuffer* mPspBuffer;
+#endif
 
 #ifdef RAD_XBOX
     unsigned vertexProgram;

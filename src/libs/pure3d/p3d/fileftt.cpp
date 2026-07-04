@@ -148,6 +148,13 @@ void tFileFTT::OnFileOperationsComplete(void*)
 }
 
 //--------------------------------------------------------------------------
+// PSP diagnostic log for the file-read path (runs on the load worker thread).
+static void ftlog(const char* s)
+{
+    FILE* f = fopen("ms0:/shar_ftt.log", "a");
+    if (f) { fputs(s, f); fputc('\n', f); fclose(f); }
+}
+
 void tFileFTT::WaitForCompletion( void )
 {
     int i = 0;
@@ -155,9 +162,12 @@ void tFileFTT::WaitForCompletion( void )
     while(!m_pIRadFile->CheckForCompletion())
     {
         i++;
+        if (i == 1)      ftlog("WFC: spinning (CheckForCompletion false)");
+        if (i == 200000) ftlog("WFC: 200k spins, still not complete");
         p3d::loadManager->SwitchTask();
         gLastTime = radTimeGetMicroseconds64();
     }
+    ftlog("WFC: complete");
     if(i>0)
     {
         time = radTimeGetMicroseconds64()-time;
@@ -206,6 +216,11 @@ bool tFileFTT::GetData(void* buf, unsigned count, DataType type)
              if(numBytes > 0)
              {
                  FillBuffer();
+                 // If FillBuffer produced no bytes and there is nothing more
+                 // queued (nextSize == 0), we are stuck — the file was either
+                 // empty or failed to open.  Return false so the caller can
+                 // surface the error instead of spinning forever.
+                 if (currentSize == 0 && nextSize == 0) return false;
              }
          }
      }
@@ -482,15 +497,50 @@ void tFileFTT::OpenFile( void )
 {
     if ( m_pIRadFile == NULL )
     {
+        {
+            char buf[ 280 ];
+            sprintf( buf, "OpenFile: %s", this->GetFullFilename() );
+            ftlog( buf );
+        }
         gLastTime = radTimeGetMicroseconds64();
 
         radFileOpen( &m_pIRadFile, this->GetFullFilename() );
         P3DASSERT(m_pIRadFile);
 
+        ftlog("pre-WFC1");
         WaitForCompletion( );
-        P3DASSERT( m_pIRadFile->IsOpen( ));
-     
+        ftlog("post-WFC1");
+
+        ftlog("pre-IsOpen");
+        bool opened = m_pIRadFile->IsOpen();
+        {
+            char buf[ 64 ];
+            sprintf( buf, "IsOpen=%d", (int)opened );
+            ftlog( buf );
+        }
+        P3DASSERT( opened );
+        if ( !opened )
+        {
+            // File was not found / failed to open. Set a valid (empty) buffer
+            // state so callers that enter GetData don't crash on a NULL
+            // currentBuffer, and so FillBuffer's size math gives 0 not a
+            // wrapped-around negative cast to unsigned.
+            cache[0] = (char*) ::radMemoryRoundUp( (uintptr_t)globalCache, 0x80 );
+            cache[1] = cache[0] + CACHE_SIZE;
+            currentBuffer = cache[0];
+            bufferSize = 0;
+            nextSize   = 0;
+            // fileSize, currentSize, currentPos, position all already 0.
+            return;
+        }
+
+        ftlog("pre-GetSize");
         fileSize = m_pIRadFile->GetSize( );
+        {
+            char buf[ 64 ];
+            sprintf( buf, "fileSize=%u", fileSize );
+            ftlog( buf );
+        }
 
         // Align to a 128 byte boundary for improved PS2 performance.
         cache[0] = (char*) ::radMemoryRoundUp( (uintptr_t)globalCache, 0x80);
@@ -500,6 +550,7 @@ void tFileFTT::OpenFile( void )
         unsigned int bytesToRead = rmt::Min(CACHE_SIZE * 2, fileSize);
         P3DASSERT((filePosition & 0x7ff) == 0);
 
+        ftlog("pre-ReadAsync");
         // Do an optimal read at the end of the file.
         if (filePosition + bytesToRead >= (unsigned int)(fileSize) )
         {
@@ -510,6 +561,7 @@ void tFileFTT::OpenFile( void )
         {
             m_pIRadFile->ReadAsync(cache[0], bytesToRead);
         }
+        ftlog("post-ReadAsync");
 
         filePosition += bytesToRead;
 
@@ -519,7 +571,9 @@ void tFileFTT::OpenFile( void )
         currentSize = rmt::Min(CACHE_SIZE, fileSize);
         nextSize = rmt::Min(fileSize - CACHE_SIZE, CACHE_SIZE);
 
+        ftlog("pre-WFC2");
         WaitForCompletion();
+        ftlog("OpenFile done");
     }
 }
 

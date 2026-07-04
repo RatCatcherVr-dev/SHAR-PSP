@@ -4,6 +4,12 @@
 
 
 #include <p3d/scenegraph/scenegraph.hpp>
+#if defined(RAD_PSP)
+#include <stdio.h>
+static void scenelog(const char* m){ FILE* f=fopen("ms0:/shar_scene.log","a"); if(f){ fputs(m,f); fputc('\n',f); fclose(f);} }
+#else
+static inline void scenelog(const char*){}
+#endif
 #include <p3d/anim/drawablepose.hpp>
 #include <p3d/anim/pose.hpp>
 #include <constants/chunks.h>
@@ -855,6 +861,9 @@ tEntity* SceneGraphGenericLoader::LoadObject(tChunkFile* f, tEntityStore* store)
 
     Scenegraph* scene = new Scenegraph;
     scene->SetName(buf);
+#if defined(RAD_PSP)
+    { char cb[160]; sprintf(cb,"SCENE LoadObject name='%s' ver=%u",buf,version); scenelog(cb); }
+#endif
 
     //
     // Clear bounding box for loader
@@ -888,6 +897,9 @@ tEntity* SceneGraphGenericLoader::LoadObject(tChunkFile* f, tEntityStore* store)
     //
     TranslucentDrawableCounter translucentDrawableCount;
     SceneGraphTraversal::Traverse(scene->GetRoot(), translucentDrawableCount);
+#if defined(RAD_PSP)
+    { char cb[96]; sprintf(cb,"SCENE root=%p pre-Traverse",(void*)scene->GetRoot()); scenelog(cb); }
+#endif
     scene->translucentDrawables.SetSize(translucentDrawableCount.GetCount());
 
     //
@@ -896,6 +908,9 @@ tEntity* SceneGraphGenericLoader::LoadObject(tChunkFile* f, tEntityStore* store)
     scene->boundingBox = boundingBox;
     
     return scene;
+#if defined(RAD_PSP)
+    scenelog("SCENE return (stored by framework)");
+#endif
 }
 
 Node* SceneGraphGenericLoader::LoadNode(tChunkFile* f, tEntityStore* store, rmt::Matrix* Root)

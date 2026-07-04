@@ -36,6 +36,10 @@ class radDrive;
 #include <filesystem>
 typedef std::fstream* radFileHandle;
 typedef std::filesystem::directory_iterator radFileDirHandle;
+#elif defined( RAD_PSP )
+#include <stdio.h>
+typedef FILE* radFileHandle;
+typedef void* radFileDirHandle;
 #endif
 
 //=============================================================================
