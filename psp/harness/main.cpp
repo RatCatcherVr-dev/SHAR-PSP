@@ -348,9 +348,24 @@ int main(int argc, char* argv[])
 
     // --- render loop --------------------------------------------------------
     unsigned frame = 0;
+    float    orbitAng = 0.0f;   // model-viewer camera spin, time-integrated
     bool loggedDone = false;
+    // Real per-frame delta (ms), so animation speed is decoupled from the
+    // render rate: the harness must feed *elapsed* time to the Pure3D/Scrooby
+    // controllers (they advance by deltaTime*fps), exactly like the desktop
+    // game loop does with radTimeGetMilliseconds() (game.cpp:482). Feeding a
+    // fixed 16 ms made animation track the frame rate (fast on PPSSPP @60,
+    // slow-mo on real PSP @20). sceKernelGetSystemTimeWide() is microseconds.
+    unsigned long long prevTimeUs = sceKernelGetSystemTimeWide();
     while (!s_exit)
     {
+        unsigned long long nowTimeUs = sceKernelGetSystemTimeWide();
+        float deltaMs = (float)(nowTimeUs - prevTimeUs) / 1000.0f;
+        prevTimeUs = nowTimeUs;
+        // Clamp hitches / debugger stalls (mirrors guisystem.cpp:508); also
+        // guards the very first frame's bogus delta.
+        if (deltaMs > 100.0f || deltaMs < 0.0f) deltaMs = 20.0f;
+
         int pulse = (frame & 0x3F);
         if (frame & 0x40) pulse = 0x3F - pulse;   // triangle wave 0..63
 
@@ -421,7 +436,7 @@ int main(int argc, char* argv[])
                         }
                         else if (g_introState == 1)
                         {
-                            mc->Advance(16.0f);
+                            mc->Advance(deltaMs);
                             float total = mc->GetNumFrames();     // 770-721
                             float cur   = mc->GetFrame();
                             float remaining = total - cur;
@@ -646,7 +661,7 @@ int main(int argc, char* argv[])
                 pglDrawRoomBackdrop();
                 // DrawFrame pumps ContinueLoading() until the project is loaded,
                 // then draws the current screen (FeScreen sets its own 2D camera).
-                Scrooby::App::GetInstance()->DrawFrame(16.0f);
+                Scrooby::App::GetInstance()->DrawFrame(deltaMs);
                 ctx->EndFrame(true);
             }
 
@@ -803,7 +818,10 @@ int main(int argc, char* argv[])
             // projection and the view matrix are all live). Pull back a little
             // extra (1.8) since scene-graph assembly spreads parts wider than
             // their individual local bounding boxes suggest.
-            float ang  = float(frame) * 0.02f;
+            // Was float(frame)*0.02f (≈1.2 rad/s at 60fps); integrate real time
+            // so the orbit rate is the same on PSP (20fps) and PPSSPP (60fps).
+            orbitAng += deltaMs * 0.001f * 1.2f;
+            float ang  = orbitAng;
             float dist = sceneRadius / rmt::Sin( rmt::DegToRadian(30.0f) ) * 1.8f;   // fit half-FOV
             rmt::Vector pos;
             pos.Set( sceneCentre.x + rmt::Sin(ang) * dist,
