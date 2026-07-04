@@ -164,7 +164,7 @@ tLoadStatus  tP3DFileHandler::Load(tFile* file, tEntityStore* store)
         tChunkHandler* h = static_cast<tChunkHandler*>(radLoad->GetDataLoader(chunkFile->GetCurrentID()));
 #if defined(RAD_PSP)
         {
-            FILE* cf = fopen("ms0:/shar_chunks.log", "a");
+            FILE* cf = pspDiagFopen("ms0:/shar_chunks.log", "a");
             if (cf) { fprintf(cf, "top chunk %08x  handler=%s\n",
                               chunkFile->GetCurrentID(), h ? "yes" : "NO"); fclose(cf); }
         }

@@ -361,7 +361,7 @@ void FeResourceManager::ContinueLoading()
             static int s_clLines = 0;
             if( g_pspDiagFrame >= 0 && s_clLines < 4000 )
             {
-                FILE* cf = fopen("ms0:/shar_cl.log","a");
+                FILE* cf = pspDiagFopen("ms0:/shar_cl.log","a");
                 if(cf){ fprintf(cf,"CL i=%d/%d %s st=%d ty=%d\n", i, mResources.Size(),
                         resource ? resource->GetName() : "(null)",
                         resource ? (int)resource->m_Status : -1,
@@ -568,7 +568,7 @@ void FeResourceManager::ContinueLoading()
                                         skipHeavy;
                             if( skip )
                             {
-                                FILE* rf = fopen("ms0:/shar_rm.log","a");
+                                FILE* rf = pspDiagFopen("ms0:/shar_rm.log","a");
                                 if(rf){ fprintf(rf,"skipping scene object: %s\n", base); fclose(rf); }
                                 mResources[i]->m_Status = RM_LOAD_COMPLETE;
                                 continue;
@@ -673,7 +673,7 @@ void FeResourceManager::ContinueLoading()
                                 (wnm[wl-1]=='d'||wnm[wl-1]=='D') &&
                                 mResources[i]->m_pspLoadAttempts > 150 )
                             {
-                                FILE* rf = fopen("ms0:/shar_rm.log","a");
+                                FILE* rf = pspDiagFopen("ms0:/shar_rm.log","a");
                                 if(rf){ fprintf(rf,"P3D skip (file-name resource, no such entity): %s\n", wnm); fclose(rf); }
                                 mResources[i]->m_Status = RM_LOAD_COMPLETE;
                                 continue;
@@ -681,7 +681,7 @@ void FeResourceManager::ContinueLoading()
                         }
                         if( (mResources[i]->m_pspLoadAttempts % 200) == 0 )
                         {
-                            FILE* rf = fopen("ms0:/shar_rm.log","a");
+                            FILE* rf = pspDiagFopen("ms0:/shar_rm.log","a");
                             if(rf){ fprintf(rf,"P3D in-progress pass %d: %s want='%s' found=%d\n",
                                     mResources[i]->m_pspLoadAttempts, mResources[i]->GetName(),
                                     (mResources[i]->m_inventoryName == "") ? mResources[i]->GetName()
@@ -689,7 +689,7 @@ void FeResourceManager::ContinueLoading()
                         }
                         if( ++mResources[i]->m_pspLoadAttempts > 6000 )
                         {
-                            FILE* rf = fopen("ms0:/shar_rm.log","a");
+                            FILE* rf = pspDiagFopen("ms0:/shar_rm.log","a");
                             if(rf){ fprintf(rf,"P3D load timed out, skipping: %s\n",
                                     mResources[i]->GetName()); fclose(rf); }
                             mResources[i]->m_Status = RM_LOAD_COMPLETE;
@@ -738,14 +738,14 @@ void FeResourceManager::ContinueLoading()
             if( nComplete != s_last )
             {
                 s_last = nComplete;
-                FILE* rf = fopen("ms0:/shar_rm.log","a");
+                FILE* rf = pspDiagFopen("ms0:/shar_rm.log","a");
                 if(rf){ fprintf(rf,"resources %d/%d complete; pending='%s'\n",
                         nComplete, nTotal, pending ? pending : "(none)"); fclose(rf); }
             }
         }
         if( allDone )
         {
-            { FILE* rf = fopen("ms0:/shar_rm.log","a"); if(rf){ fprintf(rf,"ALL DONE -> firing project complete\n"); fclose(rf);} }
+            { FILE* rf = pspDiagFopen("ms0:/shar_rm.log","a"); if(rf){ fprintf(rf,"ALL DONE -> firing project complete\n"); fclose(rf);} }
             if( GetCallback() )
             {
                 GetCallback()->OnResourceLoadComplete();

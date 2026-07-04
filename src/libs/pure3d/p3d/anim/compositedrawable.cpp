@@ -9,7 +9,7 @@
 #include <p3d/billboardobject.hpp>
 #if defined(RAD_PSP)
 #include <stdio.h>
-static void complog(const char* s){ FILE* f=fopen("ms0:/shar_comp.log","a"); if(f){ fputs(s,f); fputc('\n',f); fclose(f);} }
+static void complog(const char* s){ FILE* f=pspDiagFopen("ms0:/shar_comp.log","a"); if(f){ fputs(s,f); fputc('\n',f); fclose(f);} }
 #else
 static inline void complog(const char*){}
 #endif

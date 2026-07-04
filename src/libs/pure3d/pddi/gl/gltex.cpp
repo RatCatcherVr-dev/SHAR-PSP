@@ -198,7 +198,7 @@ void pglTexture::SetGLState(void)
                          GL_RGBA, GL_UNSIGNED_BYTE, (GLvoid*)rgba);
             radMemoryFreeAligned(rgba);
 #if defined(RAD_PSP)
-            { FILE* tf = fopen("ms0:/shar_tex.log","a");
+            { FILE* tf = pspDiagFopen("ms0:/shar_tex.log","a");
               if (tf) { fprintf(tf, "upload PAL8 %dx%d pal=%d err=%x\n",
                         xSize, ySize, m_nPaletteEntries, (unsigned)glGetError()); fclose(tf);} }
 #endif
@@ -211,7 +211,7 @@ void pglTexture::SetGLState(void)
             glCompressedTexImage2D(GL_TEXTURE_2D, 0, internalFormat, xSize,
                 ySize, 0, (int)(ceil(xSize/4.0)*ceil(ySize/4.0)*blocksize), (GLvoid*)bits[0]);
 #if defined(RAD_PSP)
-            { FILE* tf = fopen("ms0:/shar_tex.log","a");
+            { FILE* tf = pspDiagFopen("ms0:/shar_tex.log","a");
               if (tf) { fprintf(tf, "upload DXT %dx%d fmt=%d bits=%p err=%x\n",
                         xSize, ySize, (int)lock.format, (void*)bits[0], (unsigned)glGetError()); fclose(tf);} }
 #endif
@@ -245,7 +245,7 @@ void pglTexture::SetGLState(void)
                 glTexImage2D(GL_TEXTURE_2D, 0, dataFormat, xSize,
                     ySize, 0, dataFormat, GL_UNSIGNED_BYTE, (GLvoid *)bits[0]);
             }
-            { FILE* tf = fopen("ms0:/shar_tex.log","a");
+            { FILE* tf = pspDiagFopen("ms0:/shar_tex.log","a");
               if (tf) { fprintf(tf, "upload RAW %dx%d->%dx%d fmt=%d native=%d err=%x\n",
                         xSize, ySize, dx, dy, (int)lock.format, (int)lock.native, (unsigned)glGetError()); fclose(tf);} }
 #else
@@ -282,7 +282,7 @@ int fastlog2(int x)
 bool pglTexture::Create(int x, int y, int bpp, int alphaDepth, int nMip, pddiTextureType textureType, pddiTextureUsageHint usageHint)
 {
 #if defined(RAD_PSP)
-    { FILE* tf = fopen("ms0:/shar_gltex.log","a");
+    { FILE* tf = pspDiagFopen("ms0:/shar_gltex.log","a");
       if (tf) { fprintf(tf, "Create type=%d %dx%d bpp=%d nMip=%d\n", (int)textureType, x, y, bpp, nMip); fclose(tf);} }
 #endif
     xSize = x;
@@ -359,7 +359,7 @@ bool pglTexture::Create(int x, int y, int bpp, int alphaDepth, int nMip, pddiTex
     context->ADD_STAT(PDDI_STAT_TEXTURE_COUNT_32BIT, 1);
 
 #if defined(RAD_PSP)
-    { FILE* tf = fopen("ms0:/shar_gltex.log","a");
+    { FILE* tf = pspDiagFopen("ms0:/shar_gltex.log","a");
       if (tf) { fprintf(tf, "  Create OK (lock.fmt=%d depth=%d)\n", (int)lock.format, lock.depth); fclose(tf);} }
 #endif
     return true;

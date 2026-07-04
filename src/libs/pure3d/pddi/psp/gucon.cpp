@@ -77,7 +77,7 @@ static inline unsigned GuCol(pddiColour c)
 
 static void gulog(const char* s)
 {
-    FILE* f = fopen("ms0:/shar_gu.log", "a");
+    FILE* f = pspDiagFopen("ms0:/shar_gu.log", "a");
     if (f) { fputs(s, f); fputc('\n', f); fclose(f); }
 }
 
@@ -369,7 +369,7 @@ void pguContext::DrawPrimBuffer(pddiShader* material, pddiPrimBuffer* buffer)
         if(doLog)
         {
             const float* mv = (const float*)state.matrixStack[PDDI_MATRIX_MODELVIEW]->Top();
-            FILE* f = fopen("ms0:/shar_gu.log", "a");
+            FILE* f = pspDiagFopen("ms0:/shar_gu.log", "a");
             if(f && mv)
             {
                 fprintf(f, "MODELVIEW (%s):\n", g_pspSkinnedDraw ? "SKIN/Homer" : "room");
@@ -515,7 +515,7 @@ int pguContext::GetMaxLights() { return 4; }   // PSP GE supports 4 hardware lig
 void pguContext::SetAmbientLight(pddiColour col)
 {
     pddiBaseContext::SetAmbientLight(col);
-    { static int n=0; if(n<8){ FILE* f=fopen("ms0:/shar_light.log","a");
+    { static int n=0; if(n<8){ FILE* f=pspDiagFopen("ms0:/shar_light.log","a");
       if(f){ fprintf(f,"SetAmbient inFrame=%d col=%08x\n", (int)m_inFrame, GuCol(col)); fclose(f);} n++; } }
     if(!m_inFrame) return;
     sceGuAmbient(GuCol(col));
@@ -524,7 +524,7 @@ void pguContext::SetAmbientLight(pddiColour col)
 void pguContext::SetupHardwareLight(int i)
 {
     { static int n=0; if(n<24){ pddiLight& LL = state.lightingState->light[i];
-      FILE* f=fopen("ms0:/shar_light.log","a");
+      FILE* f=pspDiagFopen("ms0:/shar_light.log","a");
       if(f){ fprintf(f,"Light %d inFrame=%d enabled=%d type=%d col=%08x dir=(%.2f,%.2f,%.2f) pos=(%.2f,%.2f,%.2f)\n",
               i, (int)m_inFrame, (int)LL.enabled, (int)LL.type, GuCol(LL.colour),
               LL.worldDirection.x, LL.worldDirection.y, LL.worldDirection.z,
@@ -631,7 +631,7 @@ void pguPrimBuffer::Display(void)
     if(s_dbg < 12)
     {
         GuVert* v = (GuVert*)verts;
-        FILE* f = fopen("ms0:/shar_gu.log", "a");
+        FILE* f = pspDiagFopen("ms0:/shar_gu.log", "a");
         if(f && v && total > 0)
         {
             unsigned mid = total / 2, last = total - 1;
@@ -656,7 +656,7 @@ void pguPrimBuffer::Display(void)
         if(s_skdraw < 12)
         {
             GuVert* v = (GuVert*)verts;
-            FILE* f = fopen("ms0:/shar_gu.log", "a");
+            FILE* f = pspDiagFopen("ms0:/shar_gu.log", "a");
             if(f && v)
             {
                 unsigned i0 = (indexCount > 0 && indices) ? indices[0] : 0;

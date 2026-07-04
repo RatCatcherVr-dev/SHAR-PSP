@@ -539,7 +539,7 @@ void tPrimGroupSkinnedPC::Display(void)
         {
             Matrix* m0 = (count > 0) ? matrixPalette[verts[0].indices[0]] : NULL;
             const char* sh = (mShader && mShader->GetShader()) ? mShader->GetName() : "(null)";
-            FILE* f = fopen("ms0:/shar_gu.log","a");
+            FILE* f = pspDiagFopen("ms0:/shar_gu.log","a");
             if(f){ fprintf(f,"SKIN %d: sh='%s' nv=%d m0t=(%.2f,%.2f,%.2f) srcpos0=(%.2f,%.2f,%.2f)\n",
                     s_skdbg, sh ? sh : "(noname)", count,
                     m0?m0->m[3][0]:0.f, m0?m0->m[3][1]:0.f, m0?m0->m[3][2]:0.f,
@@ -554,7 +554,7 @@ void tPrimGroupSkinnedPC::Display(void)
         static int s_paldbg = 0;
         if( s_paldbg < 4 )
         {
-            FILE* f = fopen("ms0:/shar_skel.log","a");
+            FILE* f = pspDiagFopen("ms0:/shar_skel.log","a");
             if(f)
             {
                 fprintf(f,"--- SKIN draw %d: nMatrices=%u nv=%d ---\n", s_paldbg, nMatrices, count);

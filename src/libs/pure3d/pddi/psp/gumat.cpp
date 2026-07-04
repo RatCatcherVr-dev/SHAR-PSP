@@ -173,7 +173,7 @@ void pguMat::SetDevPass(unsigned)
         bool doLog = g_pspSkinnedDraw ? (s_matSkin < 4) : (s_matRoom < 4);
         if(doLog)
         {
-            FILE* f = fopen("ms0:/shar_mat.log","a");
+            FILE* f = pspDiagFopen("ms0:/shar_mat.log","a");
             if(f)
             {
                 fprintf(f, "%s: lit=%d tex=%d alphaTest=%d cmp=%d ref=%.2f blendMode=%d diffuse=%08x ambient=%08x\n",

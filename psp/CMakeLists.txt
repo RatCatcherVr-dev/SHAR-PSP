@@ -11,6 +11,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(-O2 -G0 -Wall)
 add_compile_definitions(RAD_RELEASE RAD_PSP NDEBUG)
 
+# PSP diagnostic logging (ms0:/shar_*.log) is OFF by default: each fopen/append/
+# close to the Memory Stick costs several ms and, emitted per-asset during a
+# load, dominates load time (see psp/psplog.h). Force-include the shim into
+# every TU so the "ms0:/shar_*.log" opens (rewritten to pspDiagFopen) become
+# NULL no-ops. Set PSP_DIAG_LOG=1 to restore instrumentation.
+add_compile_options(-include ${CMAKE_CURRENT_SOURCE_DIR}/psplog.h)
+
 set(ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 include_directories(
     ${ROOT}/src/libs/radcore/include

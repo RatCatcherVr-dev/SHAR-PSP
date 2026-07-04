@@ -27,7 +27,7 @@
 
 static void mlog(const char* s)
 {
-    FILE* f = fopen("ms0:/shar_main.log", "a");
+    FILE* f = pspDiagFopen("ms0:/shar_main.log", "a");
     if (f) { fputs(s, f); fputc('\n', f); fclose(f); }
 }
 
@@ -172,18 +172,18 @@ int main(int argc, char* argv[])
     SetupCallbacks();
 
     // truncate logs from any previous run
-    { FILE* f = fopen("ms0:/shar_main.log",  "w"); if (f) fclose(f); }
-    { FILE* f = fopen("ms0:/shar_gl.log",    "w"); if (f) fclose(f); }
-    { FILE* f = fopen("ms0:/shar_load.log",  "w"); if (f) fclose(f); }
-    { FILE* f = fopen("ms0:/shar_thread.log","w"); if (f) fclose(f); }
-    { FILE* f = fopen("ms0:/shar_drive.log", "w"); if (f) fclose(f); }
-    { FILE* f = fopen("ms0:/shar_ftt.log",   "w"); if (f) fclose(f); }
-    { FILE* f = fopen("ms0:/shar_tex.log",   "w"); if (f) fclose(f); }
-    { FILE* f = fopen("ms0:/shar_chunks.log","w"); if (f) fclose(f); }
-    { FILE* f = fopen("ms0:/shar_sprite.log","w"); if (f) fclose(f); }
-    { FILE* f = fopen("ms0:/shar_fe.log",    "w"); if (f) fclose(f); }
-    { FILE* f = fopen("ms0:/shar_rm.log",    "w"); if (f) fclose(f); }
-    { FILE* f = fopen("ms0:/shar_gltex.log", "w"); if (f) fclose(f); }
+    { FILE* f = pspDiagFopen("ms0:/shar_main.log",  "w"); if (f) fclose(f); }
+    { FILE* f = pspDiagFopen("ms0:/shar_gl.log",    "w"); if (f) fclose(f); }
+    { FILE* f = pspDiagFopen("ms0:/shar_load.log",  "w"); if (f) fclose(f); }
+    { FILE* f = pspDiagFopen("ms0:/shar_thread.log","w"); if (f) fclose(f); }
+    { FILE* f = pspDiagFopen("ms0:/shar_drive.log", "w"); if (f) fclose(f); }
+    { FILE* f = pspDiagFopen("ms0:/shar_ftt.log",   "w"); if (f) fclose(f); }
+    { FILE* f = pspDiagFopen("ms0:/shar_tex.log",   "w"); if (f) fclose(f); }
+    { FILE* f = pspDiagFopen("ms0:/shar_chunks.log","w"); if (f) fclose(f); }
+    { FILE* f = pspDiagFopen("ms0:/shar_sprite.log","w"); if (f) fclose(f); }
+    { FILE* f = pspDiagFopen("ms0:/shar_fe.log",    "w"); if (f) fclose(f); }
+    { FILE* f = pspDiagFopen("ms0:/shar_rm.log",    "w"); if (f) fclose(f); }
+    { FILE* f = pspDiagFopen("ms0:/shar_gltex.log", "w"); if (f) fclose(f); }
     mlog("boot");
 
     // Real available user memory at boot — the true heap ceiling. On a CFW PSP
@@ -570,7 +570,7 @@ int main(int argc, char* argv[])
                             // if present, start the iris closed and reveal outward.
                             {
                                 Scrooby::Page* pgIris = mm->GetPage("IrisCover");
-                                FILE* lf = fopen("ms0:/shar_iris.log", "a");
+                                FILE* lf = pspDiagFopen("ms0:/shar_iris.log", "a");
                                 if (pgIris)
                                 {
                                     g_irisLayer = pgIris->GetLayer("IrisCover");

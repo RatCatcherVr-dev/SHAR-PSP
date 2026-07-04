@@ -567,7 +567,7 @@ tSpriteLoader::~tSpriteLoader()
 #include <stdio.h>
 #include <string.h>
 #include <pspsysmem.h>
-static void splog(const char* s) { FILE* f = fopen("ms0:/shar_sprite.log","a"); if(f){fputs(s,f);fputc('\n',f);fclose(f);} }
+static void splog(const char* s) { FILE* f = pspDiagFopen("ms0:/shar_sprite.log","a"); if(f){fputs(s,f);fputc('\n',f);fclose(f);} }
 static unsigned spFreeMem() { return sceKernelTotalFreeMemSize(); }
 #else
 static inline void splog(const char*) {}

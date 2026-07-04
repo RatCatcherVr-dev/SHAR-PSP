@@ -37,7 +37,7 @@
 // PSP diagnostic: trace thread creation/startup.
 static void tlog(const char* s, const void* p)
 {
-    FILE* f = fopen("ms0:/shar_thread.log", "a");
+    FILE* f = pspDiagFopen("ms0:/shar_thread.log", "a");
     if (f) { fprintf(f, "%s %p\n", s, p); fclose(f); }
 }
 

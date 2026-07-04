@@ -172,7 +172,7 @@ radLoadFileLoader* radLoadManager::GetFileLoader( const char* extension )
 // PSP diagnostic log for the load worker thread.
 static void llog(const char* s)
 {
-    FILE* f = fopen("ms0:/shar_load.log", "a");
+    FILE* f = pspDiagFopen("ms0:/shar_load.log", "a");
     if (f) { fputs(s, f); fputc('\n', f); fclose(f); }
 }
 
@@ -227,7 +227,7 @@ void radLoadManager::InternalService()
                         // crashing) leaves the resource unresolved but keeps the
                         // engine alive — the caller just gets a NULL from the
                         // inventory later.
-                        FILE* f = fopen("ms0:/shar_load.log", "a");
+                        FILE* f = pspDiagFopen("ms0:/shar_load.log", "a");
                         if (f) { fprintf(f, "NO LOADER for '%s' (ext '%s') - skipping\n", filename, filename + i); fclose(f); }
                     }
                     else

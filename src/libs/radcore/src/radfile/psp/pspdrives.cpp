@@ -29,7 +29,7 @@
 
 static void dlog(const char* s)
 {
-    FILE* f = fopen("ms0:/shar_drive.log", "a");
+    FILE* f = pspDiagFopen("ms0:/shar_drive.log", "a");
     if (f) { fputs(s, f); fputc('\n', f); fclose(f); }
 }
 

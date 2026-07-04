@@ -480,7 +480,7 @@ void FePure3dObject::Render()
                 static int s_fz = 0;
                 if( s_fz < 12 )
                 {
-                    FILE* f = fopen("ms0:/shar_freeze.log","a");
+                    FILE* f = pspDiagFopen("ms0:/shar_freeze.log","a");
                     if(f){ fprintf(f,"pinned glow '%s' to frame 0 (nframes=%.1f)\n",
                             static_cast<const char*>(*m_alias),
                             m_MultiController->GetNumFrames()); fclose(f); }
@@ -538,7 +538,7 @@ void FePure3dObject::Render()
         static int s_zc = 0;
         if( s_zc < 24 )
         {
-            FILE* f = fopen("ms0:/shar_depth.log","a");
+            FILE* f = pspDiagFopen("ms0:/shar_depth.log","a");
             if(f){ fprintf(f,"obj '%s' zbuf=%d clearDepth=%d\n",
                     m_alias ? static_cast<const char*>(*m_alias) : "(null)",
                     (int)m_zbufferEnabled, (int)m_clearDepthBufferEnabled); fclose(f); }

@@ -146,7 +146,7 @@ tEntity* tShaderLoader::LoadObject(tChunkFile* f, tEntityStore* store)
                     }
 #if defined(RAD_PSP)
                     {
-                        FILE* tf = fopen("ms0:/shar_tex.log", "a");
+                        FILE* tf = pspDiagFopen("ms0:/shar_tex.log", "a");
                         if (tf) { fprintf(tf, "shader '%s' texparam '%s' -> %s\n",
                                           shaderName, texName, tex ? "RESOLVED" : "NULL"); fclose(tf); }
                     }

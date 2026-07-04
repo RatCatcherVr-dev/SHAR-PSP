@@ -94,7 +94,7 @@ void FeOwner::DisplayChildren()
 #if defined(RAD_PSP)
         if( g_pspDiagFrame >= 0 )
         {
-            FILE* f = fopen("ms0:/shar_draw.log","a");
+            FILE* f = pspDiagFopen("ms0:/shar_draw.log","a");
             if(f){ fprintf(f,"mf%d child %d: %s vis=%d\n", g_pspDiagFrame, di,
                    typeid(*drawable).name(), (int)drawable->IsVisible()); fclose(f); }
             di++;
@@ -140,7 +140,7 @@ void FeOwner::Display()
             rAssert( drawable );
 #if defined(RAD_PSP)
             { extern int g_pspDiagFrame; static int s_dl=0;
-              if(g_pspDiagFrame>=0 && s_dl<3000){ FILE* df=fopen("ms0:/shar_draw.log","a");
+              if(g_pspDiagFrame>=0 && s_dl<3000){ FILE* df=pspDiagFopen("ms0:/shar_draw.log","a");
                 if(df){ fprintf(df,"disp i=%d '%s' [%s] vis=%d\n", i,
                         drawable->GetName()?drawable->GetName():"?",
                         typeid(*drawable).name(), (int)drawable->IsVisible()); fclose(df);} s_dl++; } }

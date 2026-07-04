@@ -30,7 +30,7 @@ static void* s_depthBuf = (void*)0x110000;
 
 static void gulog(const char* s)
 {
-    FILE* f = fopen("ms0:/shar_gu.log", "a");
+    FILE* f = pspDiagFopen("ms0:/shar_gu.log", "a");
     if (f) { fputs(s, f); fputc('\n', f); fclose(f); }
 }
 

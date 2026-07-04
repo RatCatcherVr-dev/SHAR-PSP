@@ -421,14 +421,14 @@ void FeApp::DrawFrame( float deltaTime )
             // SwitchTask(). (m_bAsyncLoading is a mode flag, always true, so the
             // stock guard never advances the load in the standalone harness.)
             m_ResourceManager->ContinueLoading();
-            { extern int g_pspDiagFrame; if(g_pspDiagFrame>=0){ FILE*f=fopen("ms0:/shar_df.log","a"); if(f){ fputs("after ContinueLoading (returned)\n",f); fclose(f);} } }
-            { extern int g_pspDiagFrame; if(g_pspDiagFrame>=0){ FILE*f=fopen("ms0:/shar_df.log","a"); if(f){ fprintf(f,"IsLoaded=%d screen=%p\n",(int)feProject->IsLoaded(),(void*)project->GetCurrentScreen()); fclose(f);} } }
+            { extern int g_pspDiagFrame; if(g_pspDiagFrame>=0){ FILE*f=pspDiagFopen("ms0:/shar_df.log","a"); if(f){ fputs("after ContinueLoading (returned)\n",f); fclose(f);} } }
+            { extern int g_pspDiagFrame; if(g_pspDiagFrame>=0){ FILE*f=pspDiagFopen("ms0:/shar_df.log","a"); if(f){ fprintf(f,"IsLoaded=%d screen=%p\n",(int)feProject->IsLoaded(),(void*)project->GetCurrentScreen()); fclose(f);} } }
             if( feProject->IsLoaded() )
             {
                 m_DrawingFrame = true;
-            { extern int g_pspDiagFrame; if(g_pspDiagFrame>=0){ FILE*f=fopen("ms0:/shar_df.log","a"); if(f){ fputs("pre-Display\n",f); fclose(f);} } }
+            { extern int g_pspDiagFrame; if(g_pspDiagFrame>=0){ FILE*f=pspDiagFopen("ms0:/shar_df.log","a"); if(f){ fputs("pre-Display\n",f); fclose(f);} } }
                 project->GetCurrentScreen()->Display();
-            { extern int g_pspDiagFrame; if(g_pspDiagFrame>=0){ FILE*f=fopen("ms0:/shar_df.log","a"); if(f){ fputs("post-Display (returned)\n",f); fclose(f);} } }
+            { extern int g_pspDiagFrame; if(g_pspDiagFrame>=0){ FILE*f=pspDiagFopen("ms0:/shar_df.log","a"); if(f){ fputs("post-Display (returned)\n",f); fclose(f);} } }
                 m_DrawingFrame = false;
             }
 #else

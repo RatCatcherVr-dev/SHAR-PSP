@@ -151,7 +151,7 @@ void tFileFTT::OnFileOperationsComplete(void*)
 // PSP diagnostic log for the file-read path (runs on the load worker thread).
 static void ftlog(const char* s)
 {
-    FILE* f = fopen("ms0:/shar_ftt.log", "a");
+    FILE* f = pspDiagFopen("ms0:/shar_ftt.log", "a");
     if (f) { fputs(s, f); fputc('\n', f); fclose(f); }
 }
 

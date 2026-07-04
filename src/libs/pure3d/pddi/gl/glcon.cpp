@@ -106,7 +106,7 @@ pglContext::~pglContext()
 #include <stdio.h>
 static void gllog(const char* s)
 {
-    FILE* f = fopen("ms0:/shar_gl.log", "a");
+    FILE* f = pspDiagFopen("ms0:/shar_gl.log", "a");
     if (f) { fputs(s, f); fputc('\n', f); fclose(f); }
 }
 #else
@@ -763,7 +763,7 @@ extern "C" void pglCaptureRoomBackdrop(void)
     radMemoryFreeAligned(buf);
 
     s_backdropReady = true;
-    { FILE* f = fopen("ms0:/shar_fe.log","a");
+    { FILE* f = pspDiagFopen("ms0:/shar_fe.log","a");
       if(f){ fprintf(f,"backdrop captured %dx%d tex=%u err=%x\n",
              w, h, (unsigned)s_backdropTex, (unsigned)glGetError()); fclose(f);} }
 }

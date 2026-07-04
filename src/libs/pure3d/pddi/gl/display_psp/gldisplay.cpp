@@ -26,7 +26,7 @@ static EGLSurface s_eglSurface = 0;
 // Lightweight diagnostic log to the Memory Stick (no debugger needed).
 static void psplog(const char* fmt, ...)
 {
-    FILE* f = fopen("ms0:/shar_gl.log", "a");
+    FILE* f = pspDiagFopen("ms0:/shar_gl.log", "a");
     if (!f) return;
     va_list ap;
     va_start(ap, fmt);

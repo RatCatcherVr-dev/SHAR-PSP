@@ -6,7 +6,7 @@
 #include <p3d/scenegraph/scenegraph.hpp>
 #if defined(RAD_PSP)
 #include <stdio.h>
-static void scenelog(const char* m){ FILE* f=fopen("ms0:/shar_scene.log","a"); if(f){ fputs(m,f); fputc('\n',f); fclose(f);} }
+static void scenelog(const char* m){ FILE* f=pspDiagFopen("ms0:/shar_scene.log","a"); if(f){ fputs(m,f); fputc('\n',f); fclose(f);} }
 #else
 static inline void scenelog(const char*){}
 #endif
