@@ -545,8 +545,6 @@ void FeResourceManager::ContinueLoading()
                   strcmp ( base, "camset.p3d" ) != 0 ) ||
                                 // extra Homer skins (keep the animated gaghomer)
                                 strncmp( base, "homer_", 6 ) == 0 ||
-                                // other characters the main menu doesn't show
-                                strcmp( base, "maggie.p3d" )  == 0 ||
                                 // level-select preview maps (l1hudmap..l7hudmap)
                                 strstr( base, "hudmap" ) != NULL ||
                                 // reward / podium / level-select screen dressing
@@ -556,9 +554,18 @@ void FeResourceManager::ContinueLoading()
                                 strcmp( base, "pedestal.p3d" ) == 0 ||
                                 strcmp( base, "sparkles.p3d" ) == 0;
 
-                            bool skip = ( strncmp( base, "gag", 3 ) == 0 &&
-                                          strcmp( base, "gaghomer.p3d" ) != 0 ) ||
-                                        strcmp( base, "homer.p3d" ) == 0 ||
+                            // The frontend gag characters (gagbarne/gagfrink/
+                            // gaggrand/gagmole/gagnick/gagsnake + maggie) are now
+                            // LOADED so the menu can cycle them as gags (the
+                            // harness shows one at a time — see the gag cycle in
+                            // main.cpp). This is heavier on RAM: if the frontend
+                            // OOMs mid-load, downscale scene textures offline
+                            // (tools/p3dopt --maxdim) to make room, or trim this
+                            // set. gaghomer stays loaded (always-present Homer).
+                            bool skip = // homer.p3d is now LOADED: it holds Homer's
+                                        // 61-frame SLEEP idle animation (the menu
+                                        // Homer sleeps between gags; gaghomer.p3d is
+                                        // all gag poses with no neutral/sleep frame).
                                         // Collectible-card effects (cardsfx.p3d,
                                         // card*.p3d). The menu never shows cards
                                         // (their sprites are already skipped as

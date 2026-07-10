@@ -46,6 +46,73 @@ extern "C" void pglDrawRoomBackdrop(void) {}
 extern "C" void pglCaptureRoomBackdrop(void) {}
 bool pglRoomBackdropReady(void) { return false; }
 
+//-----------------------------------------------------------------------------
+// Procedural iris-open ("circle fade") overlay.
+//
+// The console frontend main-menu screen ships no IrisCover page / 3dIris object
+// (verified: the Scrooby project has neither), so the game's normal iris wipe
+// never runs on this path. Reproduce the effect directly: draw a solid black
+// ring (an annulus) whose inner circle grows from a pinhole at the screen centre
+// out past the corners, revealing the menu from the middle outward in step with
+// the intro camera move.
+//
+//   openFraction 0.0 -> nearly closed (tiny hole),  1.0 -> fully open (no draw).
+//
+// Drawn with a plain screen-space orthographic projection + identity modelview
+// (the same 0..W / H..0 mapping the 2D UI uses, which is known-good on this
+// backend) and GU_TRANSFORM_3D, so no reliance on the PSP's 2D-coord offset
+// convention. Call once, inside a frame, AFTER everything else has drawn.
+//-----------------------------------------------------------------------------
+extern "C" void pguDrawIrisMask(float openFraction)
+{
+    if(openFraction >= 1.0f) return;            // fully open: nothing to mask
+    if(openFraction < 0.0f)  openFraction = 0.0f;
+
+    const float W = 480.0f, H = 272.0f;          // PSP screen
+    const float cx = W * 0.5f, cy = H * 0.5f;
+    const float maxR = 320.0f;                    // > half-diagonal (276) so the
+                                                  // hole clears the corners when open
+    float inner = (0.05f + 0.95f * openFraction) * maxR;   // small hole at start
+    float outer = 2000.0f;                        // well past every screen corner
+
+    // Screen-space ortho: (0,0) top-left -> (-1,1), (W,H) bottom-right -> (1,-1).
+    ScePspFMatrix4 proj; gumLoadIdentity(&proj);
+    proj.x.x =  2.0f / W;
+    proj.y.y = -2.0f / H;
+    proj.w.x = -1.0f;
+    proj.w.y =  1.0f;
+    ScePspFMatrix4 ident; gumLoadIdentity(&ident);
+    sceGuSetMatrix(GU_PROJECTION, &proj);
+    sceGuSetMatrix(GU_VIEW,  &ident);
+    sceGuSetMatrix(GU_MODEL, &ident);
+
+    sceGuOffset(2048 - (unsigned)(W / 2), 2048 - (unsigned)(H / 2));
+    sceGuViewport(2048, 2048, (int)W, (int)H);
+    sceGuScissor(0, 0, (int)W, (int)H);
+
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDisable(GU_DEPTH_TEST);
+    sceGuDisable(GU_BLEND);
+    sceGuDisable(GU_LIGHTING);
+    sceGuDisable(GU_CULL_FACE);
+    sceGuDisable(GU_ALPHA_TEST);
+
+    struct IrisVert { unsigned colour; float x, y, z; };
+    const int SEG = 48;
+    IrisVert* v = (IrisVert*)sceGuGetMemory((SEG * 2 + 2) * sizeof(IrisVert));
+    int n = 0;
+    for(int i = 0; i <= SEG; i++)
+    {
+        float a  = (2.0f * 3.14159265f * (float)i) / (float)SEG;
+        float cs = cosf(a), sn = sinf(a);
+        v[n].colour = 0xff000000; v[n].x = cx + inner * cs; v[n].y = cy + inner * sn; v[n].z = 0.0f; n++;
+        v[n].colour = 0xff000000; v[n].x = cx + outer * cs; v[n].y = cy + outer * sn; v[n].z = 0.0f; n++;
+    }
+    sceGuDrawArray(GU_TRIANGLE_STRIP,
+                   GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+                   n, 0, v);
+}
+
 // Canonical interleaved GU vertex. GU requires components in this exact order:
 // (weights) texture, colour, normal, position. We always emit all three of
 // texture/colour/normal so one vertex layout serves every prim group.

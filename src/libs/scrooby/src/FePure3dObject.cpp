@@ -337,6 +337,30 @@ void FePure3dObject::AdvanceAnimation( float deltaTime )
 void FePure3dObject::Render()
 {
 #if defined(RAD_PSP)
+    // DIAG (real-hardware 3D-scene bring-up): plain-fopen (works in release) log
+    // of every 3D object's render attempt — its alias and whether it has a view,
+    // camera and (crucially) a resolved runtime drawable. If camset/gaghomer show
+    // drawable=0 on real hardware, the 3D scene never LOADED (e.g. OOM from the
+    // un-skipped gag characters); if drawable=1 but no prims draw, the geometry
+    // path is the problem. Bounded to 60 writes.
+    {
+        static int s_feDbg = 0;
+        if( s_feDbg < 60 )
+        {
+            tView* vv = p3d::context ? p3d::context->GetView() : NULL;
+            FILE* f = fopen( "ms0:/shar_feobj.log", "a" );
+            if( f )
+            {
+                fprintf( f, "render '%s' view=%d cam=%d drawable=%d\n",
+                         ( m_alias && (const char*)(*m_alias) ) ? static_cast<const char*>( *m_alias ) : "(null)",
+                         vv ? 1 : 0, ( vv && vv->GetCamera() ) ? 1 : 0,
+                         m_RuntimeDrawable ? 1 : 0 );
+                fclose( f );
+            }
+            s_feDbg++;
+        }
+    }
+
     // 3D frontend objects (gag characters) render into the active tView's
     // camera. The standalone menu path draws the screen via pddi directly and
     // sets no tView on the context, and the object's model was skipped for
@@ -599,6 +623,24 @@ void FePure3dObject::Render()
         m_Camera->SetNearPlane( Scrooby::g_CameraNearPlane );
         m_Camera->SetFarPlane( Scrooby::g_CameraFarPlane );
 #endif
+
+#if defined(RAD_PSP)
+        // The PSP GE only has a 16-bit depth buffer. The frontend camera ships
+        // with near=0.1 / far=100 (a 1000:1 ratio), which crushes almost all of
+        // that precision into the first fraction of a unit — so coplanar room
+        // surfaces z-fight (the walls flicker while the intro camera moves) and
+        // the thin exterior "bench" seen through the window loses the depth test
+        // against the ground/wall behind it at the resting pose and disappears.
+        // Push the near plane out to reclaim ~10x precision; nothing in the
+        // framed living room sits within a unit of the camera, so this never
+        // clips anything the player should see. (far is left alone so distant
+        // exterior geometry visible through the window is still drawn.)
+        if( m_Camera->GetNearPlane() < 1.0f )
+        {
+            m_Camera->SetNearPlane( 1.0f );
+        }
+#endif
+
         m_Camera->SetState();
         p3d::context->LoadViewMatrix( m_Camera->GetWorldToCameraMatrix(), m_Camera->GetCameraToWorldMatrix() );
     }

@@ -17,6 +17,7 @@
 #if defined(RAD_PSP)
 #include <p3d/view.hpp>
 #include <p3d/camera.hpp>
+#include <p3d/matrixstack.hpp>
 #endif
 
 #include <string.h>
@@ -243,6 +244,81 @@ void tPrimGroupStreamed::Display()
     P3DASSERT(mVertexList);
 
 #if defined(RAD_PSP)
+    // DIAG (fence bring-up): the menu's outside-window fence (shader
+    // "FE_fence_red_m", non-indexed tiling alpha quads) is invisible on the
+    // sceGU backend while every other exterior object renders. Log, once per
+    // fence primgroup, which draw path it takes and whether its verts land in
+    // front of the camera, to split "not drawn / off-screen" from "drawn but
+    // sampling/blending wrong". Bounded to <=12 writes total, so a plain fopen
+    // is fine (works with a normal build); this is not a per-item/per-frame log,
+    // so it does not need the PSP_DIAG_LOG gate the load/render hot paths use.
+    {
+        const char* shName = mShader ? mShader->GetName() : NULL;
+
+        // DIAG (real-hardware): plain-fopen list of the first 40 primgroups that
+        // reach Display, with shader name + path. Tells us whether the fence
+        // shader ("FE_fence_red_m") is even among the drawn geometry on real
+        // hardware (present -> drawn-but-invisible; absent -> dropped upstream).
+        {
+            static int s_allDraw = 0;
+            if( s_allDraw < 40 )
+            {
+                FILE* af = fopen( "ms0:/shar_prims.log", "a" );
+                if( af )
+                {
+                    fprintf( af, "prim #%d shader=%s path=%s nv=%d\n",
+                             s_allDraw, shName ? shName : "(null)",
+                             ( mIndexCount > 0 ) ? "VBO" : "imm",
+                             mVertexList ? mVertexList->GetNumVertex() : -1 );
+                    fclose( af );
+                }
+                s_allDraw++;
+            }
+        }
+
+        // The disappearing outside object the user reports is the "bench" (shader
+        // "bench2_m"), a sibling of the red fence ("FE_fence_red_m"); match both
+        // so we capture whichever is drawn. If the near-plane precision fix
+        // resolves it, this log shows the bench transformed in-frustum at rest.
+        if( shName && ( strstr( shName, "fence" ) || strstr( shName, "bench" ) ) )
+        {
+            static int s_fenceDraw = 0;
+            // first 6 draws (intro), then one sample every 180 draws so the log
+            // captures the held-at-rest pose too (bench has no anim of its own —
+            // only the camera changes between "moving" and "at rest").
+            if( s_fenceDraw < 6 || ( s_fenceDraw % 180 ) == 0 )
+            {
+                FILE* lf = fopen( "ms0:/shar_fence.log", "a" );
+                if( lf )
+                {
+                    int nv = mVertexList->GetNumVertex();
+                    rmt::Vector* pos = mVertexList->GetPositions();
+                    float nearP = 0.0f, farP = 0.0f;
+                    tView* vw = p3d::context ? p3d::context->GetView() : NULL;
+                    tCamera* cm = vw ? vw->GetCamera() : NULL;
+                    if( cm ) { nearP = cm->GetNearPlane(); farP = cm->GetFarPlane(); }
+                    fprintf( lf, "FENCE draw #%d shader=%s path=%s nv=%d primType=%d near=%.2f far=%.2f\n",
+                             s_fenceDraw, shName,
+                             ( mIndexCount > 0 ) ? "VBO/indexed" : "immediate/non-indexed",
+                             nv, (int)mPrimType, nearP, farP );
+                    if( pos && p3d::stack )
+                    {
+                        int show = nv < 4 ? nv : 4;
+                        for( int k = 0; k < show; k++ )
+                        {
+                            rmt::Vector vv;
+                            p3d::stack->TransformVector( pos[k], &vv );
+                            fprintf( lf, "   obj(%.2f,%.2f,%.2f) -> view(%.2f,%.2f,%.2f)\n",
+                                     pos[k].x, pos[k].y, pos[k].z, vv.x, vv.y, vv.z );
+                        }
+                    }
+                    fclose( lf );
+                }
+            }
+            s_fenceDraw++;
+        }
+    }
+
     // Build a static VBO once and draw it via the buffered path (glDrawElements)
     // instead of re-streaming every vertex through immediate mode
     // (glBegin/glVertex3f) each frame — the immediate path makes many-mesh

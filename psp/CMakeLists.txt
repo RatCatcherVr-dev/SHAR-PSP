@@ -27,6 +27,8 @@ include_directories(
     ${ROOT}/src/libs/pure3d
     ${ROOT}/src/libs/radcontent
     ${ROOT}/src/libs/radcontent/include
+    ${ROOT}/src/libs/radsound/include
+    ${ROOT}/src/libs/radsound/src/common
     ${ROOT}/src/libs/scrooby/include
     ${ROOT}/src/libs/scrooby/src
     ${ROOT}/deps/include
@@ -60,6 +62,7 @@ add_library(radcore_psp STATIC
     ${ROOT}/src/libs/radcore/src/radmemory/align.cpp
     ${ROOT}/src/libs/radcore/src/radmemory/platalloc.cpp
     ${ROOT}/src/libs/radcore/src/radmemory/externalmemoryobject.cpp
+    ${ROOT}/src/libs/radcore/src/radmemory/externalmemoryheap.cpp
     ${ROOT}/src/libs/radcore/src/radmemory/memorymanager.cpp
     ${ROOT}/src/libs/radcore/src/radmemory/memoryobject.cpp
     ${ROOT}/src/libs/radcore/src/radmemory/memorypool.cpp
@@ -283,6 +286,48 @@ add_library(scrooby_psp STATIC
     ${ROOT}/src/libs/scrooby/src/xml/XMLTree.cpp
 )
 
+# radsound HAL — the sceAudio-backed software mixer that implements the
+# radsound_hal interface (system/voice/buffer + software listener/positional).
+# The PS2-era portable core (streamplayer/clipplayer/datasource) and the game's
+# daSound layer sit ON TOP of this and are wired in a later phase; for now the
+# harness drives the HAL directly (see harness/main.cpp test tone). PSP has no
+# HW mixing voices, so hal/psp is a small software mixer over sceAudioSRC.
+add_library(radsound_psp STATIC
+    # portable radsound object + updatable base
+    ${ROOT}/src/libs/radsound/src/common/radsoundobject.cpp
+    ${ROOT}/src/libs/radsound/src/common/radsoundupdatableobject.cpp
+    ${ROOT}/src/libs/radsound/src/math/radsoundmath.cpp
+    # portable HAL helpers (audio format, memory regions, software 3D listener +
+    # positional group used by platforms without hardware positional sound)
+    ${ROOT}/src/libs/radsound/src/hal/common/audioformat.cpp
+    ${ROOT}/src/libs/radsound/src/hal/common/banner.cpp
+    ${ROOT}/src/libs/radsound/src/hal/common/radsoundfile.cpp
+    ${ROOT}/src/libs/radsound/src/hal/common/memoryregion.cpp
+    ${ROOT}/src/libs/radsound/src/hal/common/rolloff.cpp
+    ${ROOT}/src/libs/radsound/src/hal/common/softwarelistener.cpp
+    ${ROOT}/src/libs/radsound/src/hal/common/softwarepositionalgroup.cpp
+    # PSP backend: sceAudio output thread + software mixer
+    ${ROOT}/src/libs/radsound/src/hal/psp/system.cpp
+    ${ROOT}/src/libs/radsound/src/hal/psp/voice.cpp
+    ${ROOT}/src/libs/radsound/src/hal/psp/buffer.cpp
+    ${ROOT}/src/libs/radsound/src/hal/psp/bufferloader.cpp
+    # radsound core — the portable clip/stream players + data sources that sit
+    # between the game sound layer and the HAL. Loads real .rsd assets: an
+    # rsdfiledatasource reads/parses the RSD4 file (via radfile), a clip pulls it
+    # into a HAL buffer, a clipplayer drives a voice. clip.cpp's PLATFORM_AUDIO_
+    # FORMAT is PCM under RAD_PSP (PC .rsd are PCM).
+    ${ROOT}/src/libs/radsound/src/radsound/clip.cpp
+    ${ROOT}/src/libs/radsound/src/radsound/clipplayer.cpp
+    ${ROOT}/src/libs/radsound/src/radsound/streamplayer.cpp
+    ${ROOT}/src/libs/radsound/src/radsound/rsdfiledatasource.cpp
+    ${ROOT}/src/libs/radsound/src/radsound/buffereddatasource.cpp
+    ${ROOT}/src/libs/radsound/src/radsound/memorydatasource.cpp
+    ${ROOT}/src/libs/radsound/src/radsound/memoryspaceobject.cpp
+    ${ROOT}/src/libs/radsound/src/radsound/stitcheddatasource.cpp
+    ${ROOT}/src/libs/radsound/src/radsound/datacache.cpp
+    ${ROOT}/src/libs/radsound/src/radsound/radicaladpcm.cpp
+)
+
 #=============================================================================
 # Test EBOOT — proves Phases 2-3 LINK and runs the engine against real assets.
 #=============================================================================
@@ -296,6 +341,7 @@ target_include_directories(shartest PRIVATE
     ${ROOT}/src/libs/pure3d
     ${ROOT}/src/libs/radcontent
     ${ROOT}/src/libs/radcontent/include
+    ${ROOT}/src/libs/radsound/include
     ${ROOT}/deps/include
 )
 
@@ -306,13 +352,14 @@ target_link_libraries(shartest
     pure3d_p3d_psp
     pddigu_psp
     radcontent_psp
+    radsound_psp
     radcore_psp
     radmath_psp
     -Wl,--end-group
     GL pspvram pspvfpu pspgu pspgum pspge pspdisplay
     SDL2
     png16 z
-    pspctrl psphprm pspaudio psputility psppower
+    pspctrl psphprm pspaudiolib pspaudio psputility psppower
     m stdc++
 )
 

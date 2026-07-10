@@ -23,6 +23,7 @@
 #include <pspctrl.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <math.h>     // sinf — radsound HAL test tone
 #include <malloc.h>   // mallinfo() — real heap high-water for the OOM probe
 
 static void mlog(const char* s)
@@ -42,6 +43,9 @@ int g_pspSelectedGlow = 4;
 #include <radfile.hpp>
 
 #include <radload/radload.hpp>
+
+#include <radsound_hal.hpp>
+#include <radsound.hpp>          // radsound core: clip / clipplayer / rsd datasource
 
 #include <pddi/pddi.hpp>
 
@@ -114,8 +118,222 @@ static tMultiController*       g_irisMC    = NULL;
 static float g_irisFrames = 0.0f;
 static int   g_irisState  = 0;   // 0=inactive/absent, 1=revealing, 2=done(hidden)
 
+// Procedural iris ("circle fade") reveal — the console frontend has no iris
+// asset (no IrisCover page), so the backend draws a growing-circle black mask
+// (pguDrawIrisMask) synced to the intro camera move. g_irisOpen: 0=pinhole
+// (closed) .. 1=fully revealed. g_irisRunning gates the overlay draw.
+extern "C" void pguDrawIrisMask( float openFraction );
+static float g_irisOpen    = 0.0f;
+static bool  g_irisRunning = false;
+static int   g_irisFrames2 = 0;   // safety frame counter (force-open if intro stalls)
+
+// Menu-item text size (fits between the L/R selection arrows) and TV-frame bezel
+// fit factors (X = right edge, larger Y = bottom edge, since design Y 0..480 is
+// squashed into 272px). Applied absolutely every frame (see the render loop) —
+// a one-shot scale at menu setup was wiped when the Scrooby resources finished
+// loading and reset the drawables' matrices.
+static const float MENU_TEXT_SCALE = 0.6f;
+static const float TVFRAME_FIT_X   = 1.010f;
+static const float TVFRAME_FIT_Y   = 1.030f;
+
+// ---- Frontend Homer "gag" cycle ------------------------------------------
+// The retail main menu (CGuiScreenMainMenu::UpdateGags) periodically has a
+// character perform a gag animation, then returns to idle. The 6 non-Homer gag
+// characters (Grandpa/Moleman/Frink/Barney/Nick/Snake/Maggie) are skipped on
+// PSP for RAM (FeResourceManager keeps only gaghomer.p3d), so we reproduce the
+// Homer gag: idle loop, then one of Homer's gag sub-animations played once, then
+// back to idle. Frame ranges mirror the retail HOMER_GAG_ANIMATION table; the
+// idle is Homer's neutral loop. Scrooby never advances object animations in this
+// harness (FeApp::DrawFrame only Display()s), so we advance Homer's controller
+// ourselves each frame — exactly like the camera intro drives camset.
+struct HomerGagRange { float start, end; const char* name; };
+static const HomerGagRange kHomerGags[] = {
+    {   0.0f,  75.0f, "scratch-head" },
+    {  75.0f, 145.0f, "scratch-bum"  },
+    { 145.0f, 215.0f, "yawn"         },
+    { 215.0f, 355.0f, "nightmare"    },
+    { 355.0f, 475.0f, "stretch"      },
+};
+static const int   kNumHomerGags   = (int)(sizeof(kHomerGags) / sizeof(kHomerGags[0]));
+static const float HOMER_IDLE_START = 0.0f;
+static const float HOMER_IDLE_END   = 60.0f;
+
+static Scrooby::Pure3dObject* g_homer     = NULL;   // gaghomer (Gag0): the GAG poses
+static tMultiController*      g_homerMC    = NULL;
+static float    g_homerFrames = 0.0f;   // total frames in Homer's gag clip (~476)
+
+// Sleeping Homer (homer.p3d "Homer" on 3dFE): the 61-frame SLEEP idle. The menu
+// swaps visibility between this (idle/sleeping, most of the time) and g_homer
+// (gaghomer) which does an occasional gag — gaghomer has no neutral/sleep frame.
+static Scrooby::Pure3dObject* g_homerSleep   = NULL;
+static tMultiController*      g_homerSleepMC = NULL;
+static float    g_homerSleepFrames = 0.0f;
+
+static int      g_gagState  = 0;         // 0=await mc, 1=idle loop, 2=playing gag
+static float    g_gagTimer  = 0.0f;      // ms elapsed in the current idle
+static float    g_gagNextMs = 5000.0f;   // idle time before the next gag (first sooner)
+static unsigned g_gagRng    = 0x12345678;// LCG state for gag/timing choices
+
+static inline unsigned GagRand()         // cheap LCG (no rand()/srand needed)
+{
+    g_gagRng = g_gagRng * 1103515245u + 12345u;
+    return (g_gagRng >> 16) & 0x7fff;
+}
+
+// Gag playback speed. The clips played back at 1.0 looked too fast, so run them
+// (Homer + the other characters) at this relative speed.
+static const float GAG_SPEED = 0.5f;
+
+// The OTHER frontend gag characters — Gag1..Gag7 on the "3dFEGags" page
+// (Grandpa/Moleman/Frink/Barney/Nick/Snake/Maggie). They now load (un-skipped in
+// FeResourceManager) and the menu shows one at a time: reveal its layer, play
+// its animation once, hide it, wait, then the next — a second cycle running
+// alongside the always-present Homer. Their multicontrollers attach lazily on
+// the object's first Render, so we must show a gag BEFORE its controller exists
+// and poll for it; a gag that never resolves (didn't load / no RAM) is skipped.
+static Scrooby::Page*         g_gagPage = NULL;
+static Scrooby::Layer*        g_otherLayer[8] = {0};   // index by GagN (1..7)
+static Scrooby::Pure3dObject* g_otherObj[8]   = {0};
+static tMultiController*      g_otherMC   = NULL;
+static int   g_otherCur   = -1;      // gag index currently on screen (1..7) or -1
+static int   g_otherNext  = 1;       // next candidate index to try (1..7, wraps)
+static int   g_otherState = 0;       // 0=waiting, 1=starting(poll mc), 2=playing
+static int   g_otherPoll  = 0;       // frames spent waiting for the mc to attach
+static float g_otherTimer = 0.0f;
+static float g_otherNextMs = 9000.0f;// first other-gag ~9 s in
+
 // Set true to render the frontend menu (Scrooby) instead of a model .p3d.
 static const bool kMenuMode = true;
+
+// Set true to play a 440Hz sine through the radsound HAL at startup — the
+// audible smoke test for the sceAudio software-mixer backend.
+static const bool kTestTone = false;
+
+// Set true to load the real game menu stingers (sound/{accept,scroll}.rsd) and
+// play them on menu navigation / accept — the first real-asset audio through the
+// radsound core (rsd datasource -> clip -> clipplayer -> HAL). Deploy
+// content/sound/{accept,scroll}.rsd to ms0:/sound/ alongside the EBOOT.
+static const bool kMenuSounds = true;
+
+// Set true to stream the menu background music (sound/music/simpsons_theme.rsd,
+// the Simpsons theme, PCM stereo 24kHz ~7.7MB) — too big to load resident, so it
+// runs through the radsound streamplayer (small ring buffer refilled from disk).
+static const bool kMusic = true;
+
+// Menu stinger clip players (loaded async at startup; ready by the time the menu
+// appears). Refs held for the harness lifetime.
+static IRadSoundClipPlayer* g_scrollPlayer = NULL;
+static IRadSoundClipPlayer* g_acceptPlayer = NULL;
+
+// Background music streamer (streamed, not resident) + its file data source.
+static IRadSoundStreamPlayer*      g_musicStream    = NULL;
+static IRadSoundRsdFileDataSource* g_musicDs        = NULL;
+static IRadSoundHalAudioFormat*    g_musicFmt       = NULL;
+static bool                        g_musicWasPlaying = false;
+
+// Homer's frontend gag VOICE lines — one per menu gag animation, indexed to
+// match kHomerGags below (the retail FE_GAGS_FOR_HOMER order: ScratchHead,
+// ScratchBum, Yawn, Nightmare, Stretch). From nis.rcf (sound/nis/), PCM mono
+// 24kHz. Playing the matching line when its animation starts keeps them in sync.
+static const char* kGagSoundFiles[] = {
+    "sound/nis/FE_Gag_Homer_ScratchHead.rsd",  // scratch-head
+    "sound/nis/FE_Gag_Homer_ScratchBum.rsd",   // scratch-bum
+    "sound/nis/FE_Gag_Homer_Yawn.rsd",         // yawn
+    "sound/nis/FE_Gag_Homer_Nightmare.rsd",    // nightmare
+    "sound/nis/FE_homer_stretch.rsd",          // stretch
+};
+static const int kNumGagSounds = (int)(sizeof(kGagSoundFiles) / sizeof(kGagSoundFiles[0]));
+static IRadSoundClipPlayer* g_gagPlayers[ 5 ] = { NULL, NULL, NULL, NULL, NULL };
+
+// The OTHER gag characters' voice lines, indexed by GagN (1..7) to match the
+// retail FE_GAGS order (Gag1=Grandpa..Gag7=Maggie). These are longer (7-11s) and
+// total ~2.4MB, so rather than hold them resident they STREAM one at a time
+// through a shared mono streamer (only one other-gag plays at once). From nis.rcf.
+static const char* kOtherGagFiles[ 8 ] = {
+    NULL,                               // 0 = Homer (handled by resident clips)
+    "sound/nis/FE_gag_grandpa.rsd",     // 1 Grandpa
+    "sound/nis/FE_gag_moleman.rsd",     // 2 Moleman
+    "sound/nis/FE_gag_frink.rsd",       // 3 Frink
+    "sound/nis/FE_gag_barney.rsd",      // 4 Barney
+    "sound/nis/FE_gag_nick.rsd",        // 5 Nick
+    "sound/nis/FE_gag_snake.rsd",       // 6 Snake
+    "sound/nis/FE_gag_maggie.rsd",      // 7 Maggie
+};
+static IRadSoundStreamPlayer*      g_otherGagStream = NULL;
+static IRadSoundRsdFileDataSource* g_otherGagDs     = NULL;
+static IRadSoundHalAudioFormat*    g_otherGagFmt    = NULL;
+
+// Loads a .rsd file into a clip and returns a ready-to-play clip player. The
+// load is async (pumped by radFileService + sound Service each frame), so the
+// player is usable a few frames later. Mirrors SoundManager::prepareStartupSounds.
+static IRadSoundClipPlayer* HarnessLoadClipPlayer( const char* fn, IRadSoundHalAudioFormat* clipFmt )
+{
+    IRadSoundRsdFileDataSource* ds = radSoundRsdFileDataSourceCreate( RADMEMORY_ALLOC_DEFAULT );
+    ds->AddRef();
+    ds->InitializeFromFileName( fn, false, 0, IRadSoundHalAudioFormat::Frames, clipFmt );
+
+    IRadSoundClip* clip = radSoundClipCreate( RADMEMORY_ALLOC_DEFAULT );
+    clip->AddRef();
+    clip->Initialize( ds, radSoundHalSystemGet()->GetRootMemoryRegion(), false, fn );
+    ds->Release();
+
+    IRadSoundClipPlayer* player = radSoundClipPlayerCreate( RADMEMORY_ALLOC_DEFAULT );
+    player->AddRef();
+    player->SetClip( clip );   // player holds its own ref
+    clip->Release();
+    player->SetVolume( 1.0f );
+    return player;
+}
+
+// (Re)starts the streamed menu music from the top. Called once at setup and
+// again whenever the stream drains (EOS) — a simple loop for the ~80s theme.
+// Re-creates the file data source (rewind) and re-points the persistent streamer.
+static void HarnessStartMusic( void )
+{
+    if ( g_musicStream == NULL ) return;
+
+    if ( g_musicDs != NULL )
+    {
+        g_musicStream->SetDataSource( NULL );
+        g_musicDs->Release();
+        g_musicDs = NULL;
+    }
+
+    g_musicDs = radSoundRsdFileDataSourceCreate( RADMEMORY_ALLOC_DEFAULT );
+    g_musicDs->AddRef();
+    g_musicDs->InitializeFromFileName( "sound/music/simpsons_theme.rsd", false, 0,
+                                       IRadSoundHalAudioFormat::Frames, g_musicFmt );
+    g_musicStream->SetDataSource( g_musicDs );
+    g_musicStream->SetVolume( 0.6f );
+    g_musicStream->Play();
+    g_musicWasPlaying = false;
+}
+
+// Streams one other-character gag voice line (GagN, 1..7) through the shared
+// gag streamer, played once (non-looping). Re-points the streamer at the new
+// file; a still-playing previous line is cut (gags are seconds apart).
+static void HarnessPlayOtherGag( int gi )
+{
+    if ( g_otherGagStream == NULL || gi < 1 || gi > 7 || kOtherGagFiles[ gi ] == NULL )
+        return;
+
+    g_otherGagStream->Stop();
+
+    if ( g_otherGagDs != NULL )
+    {
+        g_otherGagStream->SetDataSource( NULL );
+        g_otherGagDs->Release();
+        g_otherGagDs = NULL;
+    }
+
+    g_otherGagDs = radSoundRsdFileDataSourceCreate( RADMEMORY_ALLOC_DEFAULT );
+    g_otherGagDs->AddRef();
+    g_otherGagDs->InitializeFromFileName( kOtherGagFiles[ gi ], false, 0,
+                                          IRadSoundHalAudioFormat::Frames, g_otherGagFmt );
+    g_otherGagStream->SetDataSource( g_otherGagDs );
+    g_otherGagStream->SetVolume( 1.0f );
+    g_otherGagStream->Play();
+}
 
 // Cached-room backdrop (implemented in the GL backend, pddi/gl/glcon.cpp).
 extern "C" void pglDrawRoomBackdrop( void );
@@ -230,6 +448,115 @@ int main(int argc, char* argv[])
     radFileInitialize(50, 32, RADMEMORY_ALLOC_DEFAULT);
     radLoadInitialize();                             // creates the radLoad singleton (tLoadManager::AddHandler uses it)
     radDriveMount(NULL, RADMEMORY_ALLOC_DEFAULT);    // mount default drive (ms0:)
+
+    // --- radsound HAL (sceAudio software mixer) -----------------------------
+    // Brings the audio foundation online: the mixer thread starts here and
+    // outputs silence until a voice plays. kTestTone drives a 440Hz sine
+    // through the whole HAL path (format -> memory region -> buffer -> voice ->
+    // mixer -> sceAudioSRC) to verify the backend audibly on PPSSPP / PSP.
+    // The game's SoundManager (menu music, gags, actions) layers on top of this
+    // in a later phase.
+    radSoundHalSystemInitialize(RADMEMORY_ALLOC_DEFAULT);
+    {
+        IRadSoundHalSystem::SystemDescription desc;
+        desc.m_MaxRootAllocations  = 64;
+        desc.m_NumAuxSends         = 0;
+        // Holds the resident menu-stinger + gag clips and the music stream's
+        // ring buffer. Music itself streams from disk, so this stays small.
+        desc.m_ReservedSoundMemory = 2 * 1024 * 1024;
+        radSoundHalSystemGet()->Initialize(desc);
+        mlog("radsound: HAL initialized (sceAudio mixer running)");
+    }
+
+    if (kTestTone)
+    {
+        const unsigned int rate       = 44100;                 // mixer output rate
+        const unsigned int toneFrames = rate;                  // 1 second, looped
+        const unsigned int channels   = 1;
+        const unsigned int bits       = 16;
+
+        IRadSoundHalAudioFormat* fmt = radSoundHalAudioFormatCreate(RADMEMORY_ALLOC_DEFAULT);
+        fmt->AddRef();
+        fmt->Initialize(IRadSoundHalAudioFormat::PCM, NULL, rate, channels, bits);
+
+        unsigned int bytes = radSoundHalBufferCalculateMemorySize(
+            IRadSoundHalAudioFormat::Bytes, toneFrames,
+            IRadSoundHalAudioFormat::Frames, fmt);
+
+        IRadMemoryObject* mem = NULL;
+        radSoundHalSystemGet()->GetRootMemoryRegion()->CreateMemoryObject(&mem, bytes, "testtone");
+
+        if (mem != NULL)
+        {
+            // Synthesize a 440Hz sine straight into sound memory (the mixer
+            // reads these bytes directly — no datasource needed).
+            short* pcm = (short*)mem->GetMemoryAddress();
+            const float twoPiF = 6.2831853f * 440.0f / (float)rate;
+            for (unsigned int i = 0; i < toneFrames; i++)
+            {
+                pcm[i] = (short)(sinf(twoPiF * (float)i) * 12000.0f);
+            }
+
+            IRadSoundHalBuffer* buf = radSoundHalBufferCreate(RADMEMORY_ALLOC_DEFAULT);
+            buf->AddRef();
+            buf->Initialize(fmt, mem, toneFrames, /*looping*/ true, /*streaming*/ false);
+
+            IRadSoundHalVoice* voice = radSoundHalVoiceCreate(RADMEMORY_ALLOC_DEFAULT);
+            voice->AddRef();
+            voice->SetBuffer(buf);
+            voice->SetVolume(0.7f);
+            voice->Play();
+            mlog("radsound: test tone playing (440Hz loop)");
+            // Intentionally leaked for the harness lifetime (refs held).
+        }
+        fmt->Release();
+    }
+
+    // --- Real game menu stingers (accept.rsd / scroll.rsd) ------------------
+    // The clip file format for the loose menu .rsd files is PCM mono 24kHz
+    // (matches gClipFileAudioFormat in soundnucleus.cpp and the RSD4PCM header).
+    if (kMenuSounds)
+    {
+        IRadSoundHalAudioFormat* clipFmt = radSoundHalAudioFormatCreate(RADMEMORY_ALLOC_DEFAULT);
+        clipFmt->AddRef();
+        clipFmt->Initialize(IRadSoundHalAudioFormat::PCM, NULL, 24000, 1, 16);
+
+        g_scrollPlayer = HarnessLoadClipPlayer("sound/scroll.rsd", clipFmt);
+        g_acceptPlayer = HarnessLoadClipPlayer("sound/accept.rsd", clipFmt);
+
+        // Gag SFX clips (same PCM mono 24kHz format).
+        for (int i = 0; i < kNumGagSounds; i++)
+            g_gagPlayers[i] = HarnessLoadClipPlayer(kGagSoundFiles[i], clipFmt);
+
+        clipFmt->Release();
+        mlog("radsound: menu stinger + gag clips requested");
+    }
+
+    // --- Menu background music (streamed) ----------------------------------
+    if (kMusic)
+    {
+        g_musicFmt = radSoundHalAudioFormatCreate(RADMEMORY_ALLOC_DEFAULT);
+        g_musicFmt->AddRef();
+        g_musicFmt->Initialize(IRadSoundHalAudioFormat::PCM, NULL, 24000, 2, 16);  // stereo
+
+        g_musicStream = radSoundStreamPlayerCreate(RADMEMORY_ALLOC_DEFAULT);
+        g_musicStream->AddRef();
+        // ~1s stereo ring buffer, refilled from disk each Service().
+        g_musicStream->Initialize(g_musicFmt, 1000, IRadSoundHalAudioFormat::Milliseconds,
+                                  radSoundHalSystemGet()->GetRootMemoryRegion(), "fe_music");
+        HarnessStartMusic();
+        mlog("radsound: menu music streaming (simpsons_theme)");
+
+        // Shared streamer for the other characters' (longer) gag voice lines.
+        g_otherGagFmt = radSoundHalAudioFormatCreate(RADMEMORY_ALLOC_DEFAULT);
+        g_otherGagFmt->AddRef();
+        g_otherGagFmt->Initialize(IRadSoundHalAudioFormat::PCM, NULL, 24000, 1, 16);  // mono
+        g_otherGagStream = radSoundStreamPlayerCreate(RADMEMORY_ALLOC_DEFAULT);
+        g_otherGagStream->AddRef();
+        g_otherGagStream->Initialize(g_otherGagFmt, 1000, IRadSoundHalAudioFormat::Milliseconds,
+                                     radSoundHalSystemGet()->GetRootMemoryRegion(), "fe_othergag");
+        mlog("radsound: other-character gag streamer ready");
+    }
 
     // --- Pure3D platform + context (pddi device/display/context inside) -----
     tPlatform* platform = tPlatform::Create(NULL);
@@ -366,6 +693,20 @@ int main(int argc, char* argv[])
         // guards the very first frame's bogus delta.
         if (deltaMs > 100.0f || deltaMs < 0.0f) deltaMs = 20.0f;
 
+        // Service the sound HAL each frame (drives streamplayer refills etc.).
+        radSoundHalSystemGet()->Service();
+        radSoundHalSystemGet()->ServiceOncePerFrame();
+
+        // Loop the background music: once it has actually started, a drop back to
+        // not-playing means the ~80s stream hit EOS, so restart it from the top.
+        if (g_musicStream)
+        {
+            if (g_musicStream->IsPlaying())
+                g_musicWasPlaying = true;
+            else if (g_musicWasPlaying)
+                HarnessStartMusic();
+        }
+
         int pulse = (frame & 0x3F);
         if (frame & 0x40) pulse = 0x3F - pulse;   // triangle wave 0..63
 
@@ -397,21 +738,30 @@ int main(int argc, char* argv[])
                     g_pspSelectedGlow = (g_pspSelectedGlow + itemCount - 1) % itemCount;
                 if (pressed & PSP_CTRL_RIGHT)
                     g_pspSelectedGlow = (g_pspSelectedGlow + 1) % itemCount;
+
+                // Real game menu SFX: scroll stinger on navigation, accept on X.
+                if ((pressed & (PSP_CTRL_LEFT | PSP_CTRL_RIGHT | PSP_CTRL_UP | PSP_CTRL_DOWN))
+                    && g_scrollPlayer)
+                {
+                    g_scrollPlayer->Stop();   // retrigger from the start
+                    g_scrollPlayer->Play();
+                }
+                if ((pressed & PSP_CTRL_CROSS) && g_acceptPlayer)
+                {
+                    g_acceptPlayer->Stop();
+                    g_acceptPlayer->Play();
+                }
                 s_prevBtns = pad.Buttons;
 
-                // Drive the label + highlight/animation, mirroring CGuiMenu:
-                //  - SetIndex   : show the selected item's string (text changes)
-                //  - SetColour  : yellow highlight (the shown item is the selection)
-                //  - Reset+Scale: shrink a bit (smaller) with a gentle size pulse
+                // Drive the label + highlight, mirroring CGuiMenu:
+                //  - SetIndex  : show the selected item's string (text changes)
+                //  - SetColour : yellow highlight (the shown item is the selection)
+                // The size + throb animation is applied later, right before
+                // DrawFrame (see MENU_TEXT_SCALE), because a scale set here is
+                // overwritten before the menu draws.
                 if (g_menuText)
                 {
                     g_menuText->SetIndex(g_pspSelectedGlow);
-                    const float kBaseScale = 0.7f;              // smaller than asset
-                    long long ms = (long long)(sceKernelGetSystemTimeWide() / 1000);
-                    float ph = (float)(ms % 600) / 600.0f;      // 600 ms pulse period
-                    float pulse = 1.0f + 0.06f * sinf(ph * 2.0f * 3.14159265f);
-                    g_menuText->ResetTransformation();
-                    g_menuText->ScaleAboutCenter(kBaseScale * pulse);
                     g_menuText->SetColour(tColour(255, 255, 0));
                 }
 
@@ -449,10 +799,22 @@ int main(int argc, char* argv[])
                                 a *= a;                  // ease-in, matches original
                                 g_tvFrame->SetAlpha(a);
                             }
+                            // Iris reveal tracks the intro camera progress: closed
+                            // (pinhole) at the start, fully open when the camera
+                            // settles — "the circle extends with the camera move".
+                            if (g_irisRunning && total > 0.5f)
+                            {
+                                float f = cur / total;
+                                if (f < 0.0f) f = 0.0f;
+                                if (f > 1.0f) f = 1.0f;
+                                g_irisOpen = f;
+                            }
                             if (cur >= total - 0.5f)
                             {
                                 if (g_tvFrame) g_tvFrame->SetAlpha(1.0f);
                                 g_introState = 2;        // hold idle pose (stop advancing)
+                                g_irisOpen = 1.0f;       // fully revealed
+                                g_irisRunning = false;   // stop drawing the mask
                                 mlog("scrooby: camera intro done -> idle");
                             }
                         }
@@ -470,6 +832,174 @@ int main(int argc, char* argv[])
                         if (g_irisLayer) g_irisLayer->SetVisible(false);
                         g_irisState = 2;
                         mlog("scrooby: iris reveal done");
+                    }
+                }
+
+                // Homer menu behaviour. Retail: Homer SLEEPS (homer.p3d, a 61-frame
+                // loop) most of the time and occasionally does a gag (gaghomer.p3d,
+                // a 476-frame sequence of 5 gags). We reproduce that by swapping
+                // VISIBILITY between the two loaded Homer objects: g_homerSleep
+                // (sleeping idle) shown while waiting, g_homer (gaghomer) shown for
+                // the gag. Each plays its own animation. If homer.p3d didn't load
+                // (g_homerSleep NULL) we fall back to holding gaghomer static.
+                if (g_homer)
+                {
+                    if (g_gagState == 0)
+                    {
+                        // Controllers attach lazily on first Render, so both
+                        // objects must be visible while we poll for them.
+                        if (g_homerSleep) g_homerSleep->SetVisible(true);
+                        tMultiController* mc  = g_homer->GetMultiController();
+                        tMultiController* smc = g_homerSleep ? g_homerSleep->GetMultiController() : (tMultiController*)1;
+                        if (mc && smc)
+                        {
+                            g_homerMC = mc;
+                            g_homerFrames = mc->GetNumFrames();   // gag clip (~476)
+                            mc->SetRelativeSpeed(GAG_SPEED);
+                            mc->SetCycleMode(FORCE_NON_CYCLIC);
+                            mc->SetFrameRange(0.0f, g_homerFrames);
+                            mc->SetFrame(0.0f);
+                            mc->Advance(0.0f);
+
+                            if (g_homerSleep)
+                            {
+                                g_homerSleepMC = g_homerSleep->GetMultiController();
+                                g_homerSleepFrames = g_homerSleepMC->GetNumFrames();  // sleep loop (~61)
+                                g_homerSleepMC->SetRelativeSpeed(GAG_SPEED);
+                                g_homerSleepMC->SetCycleMode(FORCE_CYCLIC);
+                                g_homerSleepMC->SetFrameRange(0.0f, g_homerSleepFrames);
+                                g_homerSleepMC->Reset();
+                                // Start asleep: show the sleeper, hide the gag Homer.
+                                g_homerSleep->SetVisible(true);
+                                g_homer->SetVisible(false);
+                            }
+                            g_gagState = 1;
+                            g_gagTimer = 0.0f;
+                            g_gagNextMs = 5000.0f;   // first gag ~5 s in
+                        }
+                    }
+                    else if (g_homerMC)
+                    {
+                        if (g_gagState == 1)           // sleeping: loop the sleep idle
+                        {
+                            if (g_homerSleepMC) g_homerSleepMC->Advance(deltaMs);
+                            g_gagTimer += deltaMs;
+                            if (g_gagTimer >= g_gagNextMs)
+                            {
+                                g_gagTimer = 0.0f;
+                                // Wake up: hide the sleeper, show the gag Homer,
+                                // play a RANDOM gag (all 5 fit the 476-frame clip).
+                                int idx = (int)(GagRand() % (unsigned)kNumHomerGags);
+                                if (g_homerSleep) g_homerSleep->SetVisible(false);
+                                g_homer->SetVisible(true);
+                                g_homerMC->SetCycleMode(FORCE_NON_CYCLIC);
+                                g_homerMC->SetFrameRange(kHomerGags[idx].start, kHomerGags[idx].end);
+                                g_homerMC->SetFrame(0.0f);   // range-relative
+                                g_homerMC->Advance(0.0f);
+                                g_gagState = 2;
+
+                                // Play Homer's matching gag VOICE line (synced).
+                                if (idx < kNumGagSounds && g_gagPlayers[idx])
+                                {
+                                    g_gagPlayers[idx]->Stop();
+                                    g_gagPlayers[idx]->Play();
+                                }
+                            }
+                        }
+                        else if (g_gagState == 2)      // gag playing: advance to its end
+                        {
+                            g_homerMC->Advance(deltaMs);
+                            if (g_homerMC->LastFrameReached() ||
+                                g_homerMC->GetFrame() >= g_homerMC->GetNumFrames() - 0.5f)
+                            {
+                                // Back to sleep: hide gag Homer, show the sleeper.
+                                if (g_homerSleep)
+                                {
+                                    g_homer->SetVisible(false);
+                                    g_homerSleep->SetVisible(true);
+                                    if (g_homerSleepMC) g_homerSleepMC->Reset();
+                                }
+                                else
+                                {
+                                    // Fallback (no sleep model): hold gag frame 0.
+                                    g_homerMC->SetFrameRange(0.0f, g_homerFrames);
+                                    g_homerMC->SetFrame(0.0f);
+                                    g_homerMC->Advance(0.0f);
+                                }
+                                g_gagState = 1;
+                                g_gagNextMs = 7000.0f + (float)(GagRand() % 7000);  // 7-14 s asleep
+                            }
+                        }
+                    }
+                }
+
+                // Other gag characters (Gag1..Gag7): one at a time, alongside
+                // Homer. Reveal a candidate's layer, wait for its controller to
+                // attach (it only does so once the object Renders, i.e. while
+                // visible), play it once, then hide and move on. A candidate that
+                // never attaches a controller (its .p3d didn't load) is skipped.
+                if (g_gagPage)
+                {
+                    if (g_otherState == 0)              // waiting between gags
+                    {
+                        g_otherTimer += deltaMs;
+                        if (g_otherTimer >= g_otherNextMs)
+                        {
+                            g_otherTimer = 0.0f;
+                            // Pick a RANDOM character (1..7) rather than cycling
+                            // them in order; avoid repeating the last one twice.
+                            {
+                                int pick = 1 + (int)(GagRand() % 7);
+                                if (pick == g_otherCur) pick = 1 + (pick % 7);
+                                g_otherCur = pick;
+                            }
+                            if (g_otherObj[g_otherCur] && g_otherLayer[g_otherCur])
+                            {
+                                g_otherLayer[g_otherCur]->SetVisible(true);  // Render -> attach mc
+                                g_otherMC = NULL;
+                                g_otherPoll = 0;
+                                g_otherState = 1;
+                            }
+                            // else: no object/layer for this slot; retry next tick
+                        }
+                    }
+                    else if (g_otherState == 1)        // starting: poll for the mc
+                    {
+                        g_otherMC = g_otherObj[g_otherCur] ? g_otherObj[g_otherCur]->GetMultiController() : NULL;
+                        if (g_otherMC)
+                        {
+                            g_otherMC->SetRelativeSpeed(GAG_SPEED);
+                            g_otherMC->SetCycleMode(FORCE_NON_CYCLIC);
+                            g_otherMC->SetFrame(0.0f);
+                            g_otherState = 2;
+
+                            // Play this character's gag voice line (streamed).
+                            HarnessPlayOtherGag(g_otherCur);
+
+                            FILE* lf = pspDiagFopen("ms0:/shar_main.log", "a");
+                            if (lf) { fprintf(lf, "other gag: Gag%d playing (mc=%p frames=%.0f)\n",
+                                      g_otherCur, (void*)g_otherMC, g_otherMC->GetNumFrames()); fclose(lf); }
+                        }
+                        else if (++g_otherPoll > 60)   // never attached -> not loaded, skip
+                        {
+                            if (g_otherLayer[g_otherCur]) g_otherLayer[g_otherCur]->SetVisible(false);
+                            g_otherState = 0;
+                            g_otherNextMs = 1500.0f;    // try the next candidate soon
+                            FILE* lf = pspDiagFopen("ms0:/shar_main.log", "a");
+                            if (lf) { fprintf(lf, "other gag: Gag%d not loaded, skipping\n", g_otherCur); fclose(lf); }
+                        }
+                    }
+                    else if (g_otherState == 2 && g_otherMC)   // playing -> hide when done
+                    {
+                        g_otherMC->Advance(deltaMs);
+                        if (g_otherMC->LastFrameReached() ||
+                            g_otherMC->GetFrame() >= g_otherMC->GetNumFrames() - 0.5f)
+                        {
+                            if (g_otherLayer[g_otherCur]) g_otherLayer[g_otherCur]->SetVisible(false);
+                            g_otherMC = NULL; g_otherCur = -1;
+                            g_otherState = 0;
+                            g_otherNextMs = 8000.0f + (float)(GagRand() % 6000);  // 8-14 s
+                        }
                     }
                 }
             }
@@ -520,6 +1050,17 @@ int main(int argc, char* argv[])
                             if (fp) fp->OnResourceLoadComplete();
                             pr->GotoScreen(mm, NULL);
                             gotoMenuDone = true;
+                            // DIAG (real-hardware fence bring-up): a PLAIN fopen
+                            // (not the PSP_DIAG_LOG-gated pspDiagFopen) written at
+                            // a definitely-reached point. If shar_probe.log shows
+                            // up on the memstick, plain fopen("ms0:/..") works on
+                            // real hardware and the empty fence log means the fence
+                            // never draws; if it's ALSO absent, fopen itself isn't
+                            // writing on real hardware (and no log ever will).
+                            {
+                                FILE* pf = fopen("ms0:/shar_probe.log", "w");
+                                if (pf) { fprintf(pf, "menu reached; plain fopen to ms0 works\n"); fclose(pf); }
+                            }
                             // Grab the multi-string menu label so we can change
                             // the selection text + highlight it (see input/pulse
                             // code). Same lookup the game uses:
@@ -563,7 +1104,66 @@ int main(int argc, char* argv[])
                                 // stay invisible forever.
                                 if (g_tvFrame && g_camset) g_tvFrame->SetAlpha(0.0f);
                                 else g_tvFrame = NULL;
+                                // (TV-frame bezel fit is applied every frame in
+                                // the render loop, not here — see TVFRAME_FIT_*.)
                                 g_introState = 0;
+                                // Homer gag object. On PSP the retail idle "Homer"
+                                // (homer.p3d) is skipped, so the loaded gag-Homer
+                                // ("Gag0" on 3dFEGags = gaghomer.p3d) is the visible
+                                // menu Homer — grab it; fall back to the 3dFE "Homer"
+                                // object if that layout is present instead.
+                                {
+                                    Scrooby::Page* pgGag = mm->GetPage("3dFEGags");
+                                    if (pgGag) g_homer = pgGag->GetPure3dObject("Gag0");
+                                    if (!g_homer)
+                                    {
+                                        Scrooby::Page* pg3d2 = mm->GetPage("3dFE");
+                                        if (pg3d2) g_homer = pg3d2->GetPure3dObject("Homer");
+                                    }
+                                    // The sleeping idle Homer (homer.p3d) lives as
+                                    // "Homer" on the 3dFE page. We swap visibility
+                                    // between it and gaghomer (Gag0). If it didn't
+                                    // load, g_homerSleep stays NULL and we fall back
+                                    // to holding gaghomer static (old behaviour).
+                                    if (pg3d) g_homerSleep = pg3d->GetPure3dObject("Homer");
+                                    if (g_homerSleep == g_homer) g_homerSleep = NULL;  // same obj (fallback layout)
+                                    g_homerSleepMC = NULL;
+                                    g_homerMC = NULL;
+                                    g_gagState = 0;
+                                    g_gagTimer = 0.0f;
+                                    g_gagNextMs = 5000.0f;   // first gag ~5 s in
+                                    g_gagRng ^= (unsigned)(sceKernelGetSystemTimeWide() & 0xffffffff);
+
+                                    // Other gag characters (Gag1..Gag7): grab
+                                    // their objects + layers and hide them; the
+                                    // cycle reveals one at a time. (Objects have
+                                    // NULL drawables until their .p3d loads; the
+                                    // cycle polls + skips any that never resolve.)
+                                    g_gagPage = pgGag;
+                                    if (g_gagPage)
+                                    {
+                                        int nLayers = g_gagPage->GetNumberOfLayers();
+                                        for (int gi = 1; gi <= 7; gi++)
+                                        {
+                                            char nm[8]; sprintf(nm, "Gag%d", gi);
+                                            g_otherObj[gi]   = g_gagPage->GetPure3dObject(nm);
+                                            g_otherLayer[gi] = (gi < nLayers) ? g_gagPage->GetLayerByIndex(gi) : NULL;
+                                            if (g_otherLayer[gi]) g_otherLayer[gi]->SetVisible(false);
+                                        }
+                                    }
+                                    g_otherCur = -1; g_otherNext = 1; g_otherState = 0;
+                                    g_otherTimer = 0.0f; g_otherNextMs = 9000.0f;
+                                }
+                                // Start the procedural circle-fade closed; it
+                                // opens in step with the intro camera move. Only
+                                // arm it when we have camset to run that intro,
+                                // else the menu would sit under a black pinhole.
+                                if (g_camset)
+                                {
+                                    g_irisRunning = true;
+                                    g_irisOpen    = 0.0f;
+                                    g_irisFrames2 = 0;
+                                }
                             }
                             // Iris wipe setup (probe + drive). Fetch the IrisCover
                             // page/layer/object and the IrisController animation;
@@ -606,6 +1206,8 @@ int main(int argc, char* argv[])
                                 mlog(mb);
                                 if (n > 0) g_pspSelectedGlow %= n;
                                 g_menuText->SetIndex(g_pspSelectedGlow);
+                                // (menu text is shrunk every frame in the render
+                                // loop, not here — see MENU_TEXT_SCALE.)
                             }
                             char db[96];
                             sprintf(db, "scrooby: GotoScreen(MainMenu) on project %d (%p)", pi, (void*)pr);
@@ -659,9 +1261,64 @@ int main(int argc, char* argv[])
                 // skips its ~280-mesh live render; only animated objects (Homer)
                 // draw live over this. Big FPS win for the menu.
                 pglDrawRoomBackdrop();
+
+                // Re-assert the menu-text + TV-frame transforms every frame, just
+                // before they're drawn. Applying them once at menu setup had no
+                // visible effect because the Scrooby resources finish loading and
+                // relaying-out AFTER that point, resetting the drawables' matrices
+                // (m_matrix -> identity) and wiping the one-shot scale. Reset then
+                // Scale each frame gives a constant, non-compounding absolute scale
+                // that survives those resets.
+                if (s_fePhase == PH_MENU)
+                {
+                    if (g_menuText)
+                    {
+                        // Animated selection "throb": pulse the (shrunk) menu text
+                        // so the highlighted item breathes like the retail menu.
+                        // Must be applied HERE, right before DrawFrame — this is
+                        // the per-frame transform that actually survives to the
+                        // draw (the earlier navigation-block scale is overwritten
+                        // before the menu renders, which is why it never showed).
+                        long long ms = (long long)(sceKernelGetSystemTimeWide() / 1000);
+                        float ph = (float)(ms % 600) / 600.0f;   // 600 ms period
+                        float pulse = 1.0f + 0.08f * sinf(ph * 2.0f * 3.14159265f);
+                        g_menuText->ResetTransformation();
+                        g_menuText->ScaleAboutCenter(MENU_TEXT_SCALE * pulse);
+                    }
+                    if (g_tvFrame)
+                    {
+                        g_tvFrame->ResetTransformation();
+                        g_tvFrame->Scale(TVFRAME_FIT_X, TVFRAME_FIT_Y, 1.0f);
+                    }
+                    static bool s_scaleLogged = false;
+                    if (!s_scaleLogged)
+                    {
+                        FILE* lf = pspDiagFopen("ms0:/shar_main.log", "a");
+                        if (lf)
+                        {
+                            fprintf(lf, "scale: menuText=%p tvFrame=%p textScale=%.2f\n",
+                                    (void*)g_menuText, (void*)g_tvFrame, MENU_TEXT_SCALE);
+                            fclose(lf);
+                        }
+                        s_scaleLogged = true;
+                    }
+                }
+
                 // DrawFrame pumps ContinueLoading() until the project is loaded,
                 // then draws the current screen (FeScreen sets its own 2D camera).
                 Scrooby::App::GetInstance()->DrawFrame(deltaMs);
+
+                // Procedural iris "circle fade": draw the growing-circle black mask
+                // over the fully-composited menu (3D scene + 2D UI), revealing it
+                // from the centre outward as the intro camera flies in. Safety:
+                // if the intro never advances the mask to open (e.g. the camset
+                // controller never attaches), force it open after ~4 s so the
+                // player is never left staring at a black pinhole.
+                if (g_irisRunning)
+                {
+                    if (++g_irisFrames2 > 240) { g_irisOpen = 1.0f; g_irisRunning = false; }
+                    pguDrawIrisMask(g_irisOpen);
+                }
                 ctx->EndFrame(true);
             }
 
