@@ -46,8 +46,7 @@ def _faces_from_primgroup(h, idx):
 
 def decimate_primgroup(pg, reduction, min_tris, stats):
     h = geo.parse_primgroup_header(pg.payload)
-    if geo.is_skinned(pg):
-        stats["skip_skinned"] += 1; return None
+    skinned = geo.is_skinned(pg)
     if h["primType"] not in (geo.PRIM_TRIANGLES, geo.PRIM_TRISTRIP):
         stats["skip_prim"] += 1; return None
 
@@ -94,6 +93,25 @@ def decimate_primgroup(pg, reduction, min_tris, stats):
         col = _carry(geo.read_colour_list(cc), mapping, nnew)
         cc.payload = geo.write_colour_list(np.clip(col + 0.5, 0, 255).astype("u1"))
 
+    # Skinned prim groups: the WEIGHT/MATRIXIDX lists are per-vertex and must
+    # match the new vertex count. Bone indices can't be averaged, so each new
+    # vertex inherits the weight+matrix-index of a representative old vertex (the
+    # lowest old index collapsing into it). The MATRIXPALETTE is unchanged (the
+    # kept indices still reference the same joints). This is exact while CPU
+    # skinning is disabled (bind-pose VBO); with skinning on it's a minor weight
+    # approximation on collapsed vertices.
+    if skinned:
+        rep = np.full(nnew, len(pos), np.int64)
+        np.minimum.at(rep, mapping, np.arange(len(pos), dtype=np.int64))
+        rep = np.clip(rep, 0, len(pos) - 1)
+        for wc in pg.find(geo.WEIGHTLIST):
+            w = geo.read_vec3_list(wc)
+            wc.payload = geo.write_vec3_list(w[rep])
+        for mc in pg.find(geo.MATRIXLIST):
+            m = geo.read_u32_list(mc)
+            mc.payload = geo.write_u32_list(m[rep])
+        stats["skinned_decimated"] += 1
+
     new_idx = nfaces.reshape(-1).astype(np.uint32)
     idx_c[0].payload = geo.write_u32_list(new_idx)
     h["primType"] = geo.PRIM_TRIANGLES
@@ -118,7 +136,7 @@ def _recompute_bounds(mesh, all_pos):
 
 def decimate_root(root, reduction, min_tris):
     """Mutate an already-loaded chunk tree in place; return geometry stats."""
-    stats = dict(decimated=0, skip_skinned=0, skip_prim=0, skip_nodata=0,
+    stats = dict(decimated=0, skinned_decimated=0, skip_prim=0, skip_nodata=0,
                  skip_small=0, skip_nogain=0, errors=0,
                  tris_in=0, tris_out=0, verts_in=0, verts_out=0)
     for mesh in [c for c in root.walk() if c.id in (geo.MESH, geo.SKIN)]:
@@ -155,7 +173,7 @@ def main():
     resid_out = s["verts_out"] * 72 + (s["verts_in"] - s["verts_out"]) * 0  # informational
     print(f"{a.src} -> {a.dst}")
     print(f"  file: {osz/1e6:.2f} -> {nsz/1e6:.2f} MB")
-    print(f"  primgroups decimated={s['decimated']} skinned={s['skip_skinned']} "
+    print(f"  primgroups decimated={s['decimated']} (skinned={s['skinned_decimated']}) "
           f"nonTri={s['skip_prim']} small={s['skip_small']} noGain={s['skip_nogain']} "
           f"err={s['errors']}")
     print(f"  triangles: {s['tris_in']} -> {s['tris_out']} "

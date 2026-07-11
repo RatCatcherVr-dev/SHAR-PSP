@@ -18,6 +18,14 @@
 #include <p3d/view.hpp>
 #include <p3d/camera.hpp>
 #include <p3d/matrixstack.hpp>
+
+// FPS optimisation: CPU skinning (tPrimGroupSkinnedStreamed::Display) is the
+// dominant per-frame cost during menu gags on real hardware. When the caller
+// knows the pose hasn't advanced this frame (see the harness's reduced character
+// animation cadence), it sets this so Display re-draws the previously skinned
+// vertices instead of re-transforming every vertex again. Default false = always
+// skin (safe). Set false whenever a pose actually changes.
+bool g_pspSkipReskin = false;
 #endif
 
 #include <string.h>
@@ -447,6 +455,17 @@ tPrimGroupSkinnedStreamed::~tPrimGroupSkinnedStreamed()
 
 void tPrimGroupSkinnedStreamed::Display(void)
 {
+#if defined(RAD_PSP)
+    // Pose unchanged this frame -> skip the per-vertex re-skin, re-draw the
+    // vertices skinned last frame (already in mVertexList). Big CPU saving when
+    // the character animation runs slower than the render rate (menu gags).
+    if (g_pspSkipReskin)
+    {
+        tPrimGroupStreamed::Display();
+        return;
+    }
+#endif
+
     int count = mVertexCount;
     SkinVertex *verts = mVertices;
     rmt::Vector* outNormals = mVertexList->GetNormals();

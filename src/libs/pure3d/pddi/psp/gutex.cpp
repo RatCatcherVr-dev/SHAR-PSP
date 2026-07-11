@@ -20,7 +20,7 @@ static int fastlog2(int x)
 pguTexture::pguTexture(pguContext* c)
     : context(c), log2X(0), log2Y(0), xSize(0), ySize(0), depth(32),
       type(PDDI_TEXTYPE_RGB), nMipMap(0), priority(0), bits(NULL),
-      m_nPaletteEntries(0), m_clutBuilt(false)
+      m_nPaletteEntries(0), m_clutBuilt(false), m_swizzled(false)
 {
     memset(m_palette, 0, sizeof(m_palette));
 }
@@ -174,9 +174,63 @@ void pguTexture::Discard(void) {}
 void pguTexture::SetPriority(int p) { priority = p; }
 int  pguTexture::GetPriority() { return priority; }
 
+// PSP texture swizzle: reorder texels into the GE's native 16-byte x 8-row block
+// layout. The GE fetches texels through a small cache; a linear (unswizzled)
+// texture thrashes it during rasterisation, which is a large fillrate cost on
+// real hardware. Reordering once at first bind makes every subsequent frame's
+// texturing much cheaper. Operates on raw bytes, so it is format-agnostic
+// (widthBytes = width * bytesPerTexel).
+static void pguSwizzle(unsigned char* dst, const unsigned char* src,
+                       unsigned widthBytes, unsigned height)
+{
+    unsigned wblocks  = widthBytes / 16;
+    unsigned hblocks  = height / 8;
+    unsigned srcPitch = (widthBytes - 16) / 4;   // in u32 units
+    unsigned srcRow   = widthBytes * 8;          // bytes per 8-row band
+    const unsigned char* ysrc = src;
+    unsigned* d = (unsigned*)dst;
+    for(unsigned by = 0; by < hblocks; by++)
+    {
+        const unsigned char* xsrc = ysrc;
+        for(unsigned bx = 0; bx < wblocks; bx++)
+        {
+            const unsigned* s = (const unsigned*)xsrc;
+            for(unsigned n = 0; n < 8; n++)
+            {
+                *d++ = *s++; *d++ = *s++; *d++ = *s++; *d++ = *s++;
+                s += srcPitch;
+            }
+            xsrc += 16;
+        }
+        ysrc += srcRow;
+    }
+}
+
 void pguTexture::SetGUState(void)
 {
     int bufw = xSize;   // pow2 width == buffer stride for the GE
+
+    // Swizzle the texel data once (single-level textures whose dimensions land
+    // on the 16-byte x 8-row block grid). Small surfaces that don't fit the grid
+    // stay linear. Done here (first bind) rather than at load so it covers every
+    // texture path uniformly.
+    int bytesPerTexel = (type == PDDI_TEXTYPE_PALETTIZED) ? 1 : 4;
+    unsigned widthBytes = (unsigned)xSize * bytesPerTexel;
+    bool canSwizzle = (nMipMap == 0) && (widthBytes % 16 == 0) && ((unsigned)ySize % 8 == 0);
+    if(canSwizzle && !m_swizzled && bits && bits[0])
+    {
+        unsigned sz = widthBytes * (unsigned)ySize;
+        unsigned char* tmp = (unsigned char*)radMemoryAllocAligned(radMemoryGetCurrentAllocator(), sz, 16);
+        if(tmp)
+        {
+            pguSwizzle(tmp, (const unsigned char*)bits[0], widthBytes, (unsigned)ySize);
+            memcpy(bits[0], tmp, sz);
+            radMemoryFreeAligned(radMemoryGetCurrentAllocator(), tmp);
+            sceKernelDcacheWritebackRange(bits[0], sz);
+            m_swizzled = true;
+        }
+    }
+    int swz = m_swizzled ? 1 : 0;   // GU_TRUE when the data is block-ordered
 
     if(type == PDDI_TEXTYPE_PALETTIZED)
     {
@@ -196,12 +250,12 @@ void pguTexture::SetGUState(void)
         }
         sceGuClutMode(GU_PSM_8888, 0, 0xff, 0);
         sceGuClutLoad(256 / 8, m_clut);        // 256 entries, 8 per block
-        sceGuTexMode(GU_PSM_T8, 0, 0, 0);      // 8-bit indexed, no mips, unswizzled
+        sceGuTexMode(GU_PSM_T8, 0, 0, swz);    // 8-bit indexed, no mips
         sceGuTexImage(0, xSize, ySize, bufw, bits[0]);
     }
     else
     {
-        sceGuTexMode(GU_PSM_8888, 0, 0, 0);    // 32-bit RGBA, no mips, unswizzled
+        sceGuTexMode(GU_PSM_8888, 0, 0, swz);  // 32-bit RGBA, no mips
         sceGuTexImage(0, xSize, ySize, bufw, bits[0]);
     }
 }

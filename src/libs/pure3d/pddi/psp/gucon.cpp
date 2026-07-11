@@ -26,6 +26,7 @@ unsigned int __attribute__((aligned(16))) g_guDisplayList[262144];
 // era so we can measure the sceGU backend's draw counts the same way).
 int g_pspDrawBuffer = 0;
 int g_pspDrawStream = 0;
+int g_pspVerts = 0;      // total vertices submitted this frame (perf probe)
 
 // TEST: set true around CPU-skinned character draws so the material path can
 // treat just those draws as opaque (isolate whether Homer is alpha-blended away).
@@ -482,7 +483,11 @@ pddiPrimStream* pguContext::BeginPrims(pddiShader* material, pddiPrimType primTy
 void pguContext::EndPrims(pddiPrimStream*)
 {
     if(m_inFrame && s_immStream.count > 0)
+    {
+        extern int g_pspVerts;
+        g_pspVerts += s_immStream.count;
         sceGuDrawArray(guPrimTable[s_immPrimType], GU_VTYPE_BASE, s_immStream.count, 0, s_immStream.base);
+    }
 }
 
 //-----------------------------------------------------------------------------

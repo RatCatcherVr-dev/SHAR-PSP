@@ -58,6 +58,7 @@ protected:
     int        m_nPaletteEntries;
     unsigned   m_clut[256];  // ABGR CLUT built for the GE (lazy)
     bool       m_clutBuilt;
+    bool       m_swizzled;   // texel data reordered into GE 16x8 blocks (lazy, once)
 };
 
 #endif

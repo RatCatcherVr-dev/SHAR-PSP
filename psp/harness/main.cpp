@@ -342,6 +342,22 @@ extern "C" void pglDrawRoomBackdrop( void );
 float g_dbgBackdropMs = 0.0f, g_dbgDrawFrameMs = 0.0f, g_dbgEndFrameMs = 0.0f;
 int g_pspDiagFrame = -1;  // >=0 => log each drawable child (first menu frames)
 
+// FPS/bottleneck probe. Per-draw counters live in the sceGU backend (gucon.cpp).
+// Every kPerfWindow menu frames we log averages to ms0:/shar_perf.log so we can
+// see the real split (total frame ms vs DrawFrame ms vs draw-call count) and how
+// much a gag character adds. Plain fopen once per window (~3s) is negligible.
+extern int g_pspDrawBuffer;
+extern int g_pspDrawStream;
+extern int g_pspVerts;
+// When true, skinned characters re-draw last frame's skinned verts instead of
+// re-transforming — set on frames where the character animation didn't advance.
+extern bool g_pspSkipReskin;
+static const bool kPerfLog = true;
+static const int  kPerfWindow = 60;
+static int    s_perfFrames = 0;
+static float  s_perfFrameMs = 0.0f, s_perfDrawMs = 0.0f, s_perfEndMs = 0.0f;
+static int    s_perfDrawCalls = 0, s_perfGagFrames = 0, s_perfVerts = 0;
+
 // Fires when a Scrooby project finishes loading (records the project pointer).
 struct HarnessLoadCB : public Scrooby::LoadProjectCallback
 {
@@ -693,6 +709,19 @@ int main(int argc, char* argv[])
         // guards the very first frame's bogus delta.
         if (deltaMs > 100.0f || deltaMs < 0.0f) deltaMs = 20.0f;
 
+        // Character animation runs full-rate (smooth). The skip-reskin experiment
+        // (advance/skin every other frame) gave NO fps gain on real hardware —
+        // per-vertex skinning is not the bottleneck (it's GPU fillrate + per-draw
+        // state), so it's disabled to keep the animation smooth.
+        float charDelta = deltaMs;
+        // Skip per-vertex CPU re-skinning every frame. The PSP skinned VBO is
+        // built ONCE (bind pose) and never refilled, so the re-skin never reached
+        // the GE — it was pure wasted work. Confirmed on hardware: fps improved
+        // and the menu characters (driven by their joint/composite transforms)
+        // still animate. NOTE: when the full game needs true vertex deformation,
+        // this must be re-enabled together with a per-frame VBO refill.
+        g_pspSkipReskin = true;
+
         // Service the sound HAL each frame (drives streamplayer refills etc.).
         radSoundHalSystemGet()->Service();
         radSoundHalSystemGet()->ServiceOncePerFrame();
@@ -873,6 +902,7 @@ int main(int argc, char* argv[])
                                 g_homerSleep->SetVisible(true);
                                 g_homer->SetVisible(false);
                             }
+                            g_pspSkipReskin = false;   // first visible pose must skin
                             g_gagState = 1;
                             g_gagTimer = 0.0f;
                             g_gagNextMs = 5000.0f;   // first gag ~5 s in
@@ -882,7 +912,7 @@ int main(int argc, char* argv[])
                     {
                         if (g_gagState == 1)           // sleeping: loop the sleep idle
                         {
-                            if (g_homerSleepMC) g_homerSleepMC->Advance(deltaMs);
+                            if (g_homerSleepMC) g_homerSleepMC->Advance(charDelta);
                             g_gagTimer += deltaMs;
                             if (g_gagTimer >= g_gagNextMs)
                             {
@@ -896,6 +926,7 @@ int main(int argc, char* argv[])
                                 g_homerMC->SetFrameRange(kHomerGags[idx].start, kHomerGags[idx].end);
                                 g_homerMC->SetFrame(0.0f);   // range-relative
                                 g_homerMC->Advance(0.0f);
+                                g_pspSkipReskin = false;     // new pose -> must skin this frame
                                 g_gagState = 2;
 
                                 // Play Homer's matching gag VOICE line (synced).
@@ -908,11 +939,12 @@ int main(int argc, char* argv[])
                         }
                         else if (g_gagState == 2)      // gag playing: advance to its end
                         {
-                            g_homerMC->Advance(deltaMs);
+                            g_homerMC->Advance(charDelta);
                             if (g_homerMC->LastFrameReached() ||
                                 g_homerMC->GetFrame() >= g_homerMC->GetNumFrames() - 0.5f)
                             {
                                 // Back to sleep: hide gag Homer, show the sleeper.
+                                g_pspSkipReskin = false;     // pose/visibility change -> skin this frame
                                 if (g_homerSleep)
                                 {
                                     g_homer->SetVisible(false);
@@ -956,6 +988,7 @@ int main(int argc, char* argv[])
                             if (g_otherObj[g_otherCur] && g_otherLayer[g_otherCur])
                             {
                                 g_otherLayer[g_otherCur]->SetVisible(true);  // Render -> attach mc
+                                g_pspSkipReskin = false;   // newly shown -> skin it
                                 g_otherMC = NULL;
                                 g_otherPoll = 0;
                                 g_otherState = 1;
@@ -965,6 +998,7 @@ int main(int argc, char* argv[])
                     }
                     else if (g_otherState == 1)        // starting: poll for the mc
                     {
+                        g_pspSkipReskin = false;   // attaching/first pose -> keep skinning
                         g_otherMC = g_otherObj[g_otherCur] ? g_otherObj[g_otherCur]->GetMultiController() : NULL;
                         if (g_otherMC)
                         {
@@ -991,7 +1025,7 @@ int main(int argc, char* argv[])
                     }
                     else if (g_otherState == 2 && g_otherMC)   // playing -> hide when done
                     {
-                        g_otherMC->Advance(deltaMs);
+                        g_otherMC->Advance(charDelta);
                         if (g_otherMC->LastFrameReached() ||
                             g_otherMC->GetFrame() >= g_otherMC->GetNumFrames() - 0.5f)
                         {
@@ -1306,7 +1340,10 @@ int main(int argc, char* argv[])
 
                 // DrawFrame pumps ContinueLoading() until the project is loaded,
                 // then draws the current screen (FeScreen sets its own 2D camera).
+                unsigned long long tD0 = sceKernelGetSystemTimeWide();
+                g_pspDrawBuffer = 0; g_pspDrawStream = 0; g_pspVerts = 0;
                 Scrooby::App::GetInstance()->DrawFrame(deltaMs);
+                unsigned long long tD1 = sceKernelGetSystemTimeWide();
 
                 // Procedural iris "circle fade": draw the growing-circle black mask
                 // over the fully-composited menu (3D scene + 2D UI), revealing it
@@ -1319,7 +1356,36 @@ int main(int argc, char* argv[])
                     if (++g_irisFrames2 > 240) { g_irisOpen = 1.0f; g_irisRunning = false; }
                     pguDrawIrisMask(g_irisOpen);
                 }
+                unsigned long long tE0 = sceKernelGetSystemTimeWide();
                 ctx->EndFrame(true);
+                unsigned long long tE1 = sceKernelGetSystemTimeWide();
+
+                // Accumulate FPS/bottleneck stats; log averages every window.
+                if (kPerfLog)
+                {
+                    s_perfFrames++;
+                    s_perfFrameMs   += deltaMs;
+                    s_perfDrawMs    += (float)(tD1 - tD0) / 1000.0f;   // DrawFrame (incl. skinning)
+                    s_perfEndMs     += (float)(tE1 - tE0) / 1000.0f;   // EndFrame / swap
+                    s_perfDrawCalls  = g_pspDrawBuffer;   // VBO/DrawPrimBuffer draws
+                    s_perfVerts      = g_pspDrawStream;   // immediate BeginPrims draws
+                    if (g_gagState == 2 || g_otherState == 2) s_perfGagFrames++;
+                    if (s_perfFrames >= kPerfWindow)
+                    {
+                        float n = (float)s_perfFrames;
+                        FILE* pf = fopen("ms0:/shar_perf.log", "a");
+                        if (pf)
+                        {
+                            fprintf(pf, "avgFrame=%.1fms (%.1ffps) DrawFrame=%.1fms EndFrame=%.1fms vboDraws=%d immDraws=%d immVerts=%d gagFrames=%d/%d\n",
+                                    s_perfFrameMs / n, 1000.0f / (s_perfFrameMs / n),
+                                    s_perfDrawMs / n, s_perfEndMs / n,
+                                    s_perfDrawCalls, s_perfVerts, g_pspVerts, s_perfGagFrames, s_perfFrames);
+                            fclose(pf);
+                        }
+                        s_perfFrames = 0; s_perfFrameMs = s_perfDrawMs = s_perfEndMs = 0.0f;
+                        s_perfGagFrames = 0;
+                    }
+                }
             }
 
 
