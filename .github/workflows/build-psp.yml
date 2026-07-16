@@ -15,35 +15,29 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Fix Case-Sensitivity Issues
+      - name: Fix Case-Sensitivity Issues (Global Patcher)
         run: |
-          # Find all occurrences of debugmessages.h (case-insensitive)
-          find . -iname "debugmessages.h" | while read -r FILE_PATH; do
-            DIR_PATH=$(dirname "$FILE_PATH")
-            PARENT_DIR=$(dirname "$DIR_PATH")
-            DIR_NAME=$(basename "$DIR_PATH")
-            FILE_NAME=$(basename "$FILE_PATH")
-            
-            # Convert directory name to lowercase to check if it matches 'utility'
-            LOWER_DIR_NAME=$(echo "$DIR_NAME" | tr '[:upper:]' '[:lower:]')
-            
-            # 1. Fix file casing if needed (e.g., DebugMessages.h -> debugmessages.h)
-            if [ "$FILE_NAME" != "debugmessages.h" ]; then
-              echo "Creating file symlink: $DIR_PATH/debugmessages.h -> $FILE_NAME"
-              (cd "$DIR_PATH" && ln -sf "$FILE_NAME" debugmessages.h)
+          echo "=== Patching Directory Casing ==="
+          # Find all directories containing uppercase letters and create lowercase symlinks for them
+          find . -type d -not -path '*/.*' -not -path '.' | while read -r DIR; do
+            PARENT=$(dirname "$DIR")
+            NAME=$(basename "$DIR")
+            LOWER_NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]')
+            if [ "$NAME" != "$LOWER_NAME" ]; then
+              echo "Symlinking directory: $PARENT/$LOWER_NAME -> $NAME"
+              (cd "$PARENT" && ln -sf "$NAME" "$LOWER_NAME")
             fi
-            
-            # 2. Fix local directory casing if needed (e.g., Utility -> utility)
-            if [ "$LOWER_DIR_NAME" = "utility" ] && [ "$DIR_NAME" != "utility" ]; then
-              echo "Creating local directory symlink in $PARENT_DIR: utility -> $DIR_NAME"
-              (cd "$PARENT_DIR" && ln -sf "$DIR_NAME" utility)
-            fi
-            
-            # 3. Create a global symlink under 'src' as a fallback for -Isrc/
-            if [ -d "${GITHUB_WORKSPACE}/src" ]; then
-              echo "Creating global fallback symlink in src/ -> $DIR_PATH"
-              ABS_DIR_PATH=$(realpath "$DIR_PATH")
-              ln -sf "$ABS_DIR_PATH" "${GITHUB_WORKSPACE}/src/utility"
+          done
+
+          echo "=== Patching Header File Casing ==="
+          # Find all .h/.hpp files containing uppercase letters and create lowercase symlinks for them
+          find . -type f \( -name "*.h" -o -name "*.hpp" \) -not -path '*/.*' | while read -r FILE; do
+            DIR=$(dirname "$FILE")
+            NAME=$(basename "$FILE")
+            LOWER_NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]')
+            if [ "$NAME" != "$LOWER_NAME" ]; then
+              echo "Symlinking header: $DIR/$LOWER_NAME -> $NAME"
+              (cd "$DIR" && ln -sf "$NAME" "$LOWER_NAME")
             fi
           done
 
