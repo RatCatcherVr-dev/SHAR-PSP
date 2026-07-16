@@ -15,14 +15,25 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Fix Case-Sensitivity Issues
+        run: |
+          # Automatically find the directory that contains debugmessages.h
+          # and create a symlink to fix the case-sensitivity mismatch
+          FILE_PATH=$(find . -name "debugmessages.h" | head -n 1)
+          if [ -n "$FILE_PATH" ]; then
+            DIR_PATH=$(dirname "$FILE_PATH")
+            PARENT_DIR=$(dirname "$DIR_PATH")
+            # Create a symlink named 'utility' pointing to the actual folder found
+            # This ensures that #include "utility/..." always works
+            cd "$PARENT_DIR"
+            ln -s *utility* utility 2>/dev/null || true
+          fi
+
       - name: Configure CMake
         run: |
-          # Automatically find the path to the utility headers
-          RADCORE_PATH=$(find ${GITHUB_WORKSPACE}/src -name "radcore" -type d | head -n 1)
-          
           psp-cmake -S psp -B psp/build \
-            -DCMAKE_C_FLAGS="-w -I${GITHUB_WORKSPACE}/src -I${RADCORE_PATH}/inc -I${RADCORE_PATH}/include" \
-            -DCMAKE_CXX_FLAGS="-w -I${GITHUB_WORKSPACE}/src -I${RADCORE_PATH}/inc -I${RADCORE_PATH}/include"
+            -DCMAKE_C_FLAGS="-w -I${GITHUB_WORKSPACE}/src" \
+            -DCMAKE_CXX_FLAGS="-w -I${GITHUB_WORKSPACE}/src"
 
       - name: Compile PSP Port
         run: make -C psp/build
