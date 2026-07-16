@@ -18,8 +18,8 @@ jobs:
       - name: Configure CMake
         run: |
           psp-cmake -S psp -B psp/build \
-            -DCMAKE_C_FLAGS="-w -I${GITHUB_WORKSPACE}/src" \
-            -DCMAKE_CXX_FLAGS="-w -I${GITHUB_WORKSPACE}/src"
+            -DCMAKE_C_FLAGS="-w -I${GITHUB_WORKSPACE}/src -I${GITHUB_WORKSPACE}/src/libs/radcore/include -I${GITHUB_WORKSPACE}/src/libs/radcore/inc" \
+            -DCMAKE_CXX_FLAGS="-w -I${GITHUB_WORKSPACE}/src -I${GITHUB_WORKSPACE}/src/libs/radcore/include -I${GITHUB_WORKSPACE}/src/libs/radcore/inc"
 
       - name: Compile PSP Port
         run: make -C psp/build
