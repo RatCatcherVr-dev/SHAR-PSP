@@ -1,7 +1,7 @@
 name: Build PSP Port
 
 on:
-  workflow_dispatch: # Allows manual trigger from the Actions tab
+  workflow_dispatch:
 
 jobs:
   build-psp:
@@ -15,16 +15,13 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Configure CMake (Suppress Warnings)
-        # We append -w to disable warnings so modern GCC doesn't choke on legacy codebase structures
+      - name: Configure CMake
         run: |
           psp-cmake -S psp -B psp/build \
-            -DCMAKE_C_FLAGS="-w" \
-            -DCMAKE_CXX_FLAGS="-w"
+            -DCMAKE_C_FLAGS="-w -I${GITHUB_WORKSPACE}/src" \
+            -DCMAKE_CXX_FLAGS="-w -I${GITHUB_WORKSPACE}/src"
 
       - name: Compile PSP Port
-        # Compiling on a single thread first ensures that if an actual error occurs, 
-        # it will be the absolute last line printed in your action log.
         run: make -C psp/build
 
       - name: Upload EBOOT Artifact
