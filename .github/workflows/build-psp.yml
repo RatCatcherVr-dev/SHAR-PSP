@@ -15,31 +15,123 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Fix Case-Sensitivity Issues (Global Patcher)
+      - name: Fix Case-Sensitivity (Smart Include Resolver)
+        shell: python3 {0}
         run: |
-          echo "=== Patching Directory Casing ==="
-          # Find all directories containing uppercase letters and create lowercase symlinks for them
-          find . -type d -not -path '*/.*' -not -path '.' | while read -r DIR; do
-            PARENT=$(dirname "$DIR")
-            NAME=$(basename "$DIR")
-            LOWER_NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]')
-            if [ "$NAME" != "$LOWER_NAME" ]; then
-              echo "Symlinking directory: $PARENT/$LOWER_NAME -> $NAME"
-              (cd "$PARENT" && ln -sf "$NAME" "$LOWER_NAME")
-            fi
-          done
+          import os
+          import re
+          from pathlib import Path
 
-          echo "=== Patching Header File Casing ==="
-          # Find all .h/.hpp files containing uppercase letters and create lowercase symlinks for them
-          find . -type f \( -name "*.h" -o -name "*.hpp" \) -not -path '*/.*' | while read -r FILE; do
-            DIR=$(dirname "$FILE")
-            NAME=$(basename "$FILE")
-            LOWER_NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]')
-            if [ "$NAME" != "$LOWER_NAME" ]; then
-              echo "Symlinking header: $DIR/$LOWER_NAME -> $NAME"
-              (cd "$DIR" && ln -sf "$NAME" "$LOWER_NAME")
-            fi
-          done
+          extensions = {'.cpp', '.c', '.cc', '.h', '.hpp'}
+          include_re = re.compile(r'#\s*include\s*["<]([^">]+)[">]')
+
+          workspace = Path(os.environ.get('GITHUB_WORKSPACE', '.'))
+          
+          # Initialize compiler include search path priority
+          include_dirs = [workspace, workspace / 'src']
+          
+          # Auto-discover library paths to mimic compiler include paths dynamically
+          libs_path = workspace / 'src/libs'
+          if libs_path.exists():
+              for entry in os.scandir(libs_path):
+                  if entry.is_dir():
+                      include_dirs.append(Path(entry.path))
+                      src_sub = Path(entry.path) / 'src'
+                      if src_sub.exists():
+                          include_dirs.append(src_sub)
+                      inc_sub = Path(entry.path) / 'include'
+                      if inc_sub.exists():
+                          include_dirs.append(inc_sub)
+
+          def find_case_insensitive(base_dir, path_parts):
+              """Resolves an include path case-insensitively on disk."""
+              current = Path(base_dir)
+              resolved_parts = []
+              for part in path_parts:
+                  if not current.exists():
+                      return None, []
+                  matched = None
+                  part_lower = part.lower()
+                  try:
+                      for entry in os.scandir(current):
+                          if entry.name.lower() == part_lower:
+                              matched = entry.name
+                              break
+                  except Exception:
+                      return None, []
+                  
+                  if matched is not None:
+                      current = current / matched
+                      resolved_parts.append(matched)
+                  else:
+                      return None, []
+              return current, resolved_parts
+
+          # Find all C/C++ files
+          all_files = []
+          for root, dirs, files in os.walk('.'):
+              dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'build']
+              for file in files:
+                  if Path(file).suffix in extensions:
+                      all_files.append(Path(root) / file)
+
+          print(f"Scanning {len(all_files)} files for case-mismatched includes...")
+          symlinks_created = 0
+
+          for file_path in all_files:
+              try:
+                  content = file_path.read_text(errors='ignore')
+              except Exception:
+                  continue
+              
+              includes = include_re.findall(content)
+              file_dir = file_path.parent
+              
+              for inc in includes:
+                  if '.' not in os.path.basename(inc):
+                      continue  # Skip standard library headers (e.g., <vector>)
+                      
+                  inc_normalized = inc.replace('\\', '/')
+                  inc_parts = inc_normalized.split('/')
+                  
+                  resolved_path = None
+                  resolved_root = None
+                  actual_parts = []
+                  
+                  # Search in current directory first, then include paths
+                  search_roots = [file_dir] + include_dirs
+                  for root in search_roots:
+                      found, parts = find_case_insensitive(root, inc_parts)
+                      if found and found.exists():
+                          resolved_path = found
+                          resolved_root = Path(root)
+                          actual_parts = parts
+                          break
+                          
+                  if resolved_path and resolved_root:
+                      current_link_dir = resolved_root
+                      current_actual_dir = resolved_root
+                      
+                      # Walk path components and build symlinks for mismatches
+                      for i in range(len(inc_parts)):
+                          part = inc_parts[i]
+                          actual_part = actual_parts[i]
+                          
+                          if part != actual_part:
+                              link_path = current_link_dir / part
+                              if not link_path.exists() and not link_path.is_symlink():
+                                  print(f"Fixing casing: {link_path} -> {actual_part}")
+                                  link_path.parent.mkdir(parents=True, exist_ok=True)
+                                  try:
+                                      os.symlink(actual_part, link_path)
+                                      symlinks_created += 1
+                                  except Exception as e:
+                                      print(f"Failed to link {link_path} -> {actual_part}: {e}")
+                          
+                          current_link_dir = current_link_dir / part
+                          current_actual_dir = current_actual_dir / actual_part
+
+          print(f"Successfully resolved casing! Created {symlinks_created} symlinks.")
 
       - name: Configure CMake
         run: |
