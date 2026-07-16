@@ -1,7 +1,7 @@
 name: Build PSP Port
 
 on:
-  workflow_dispatch: # This adds the manual "Run workflow" button in your Actions tab
+  workflow_dispatch: # Allows manual trigger from the Actions tab
 
 jobs:
   build-psp:
@@ -13,12 +13,19 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
-      - name: Configure CMake
-        run: psp-cmake -S psp -B psp/build
+      - name: Configure CMake (Suppress Warnings)
+        # We append -w to disable warnings so modern GCC doesn't choke on legacy codebase structures
+        run: |
+          psp-cmake -S psp -B psp/build \
+            -DCMAKE_C_FLAGS="-w" \
+            -DCMAKE_CXX_FLAGS="-w"
 
       - name: Compile PSP Port
-        run: make -C psp/build -j$(nproc)
+        # Compiling on a single thread first ensures that if an actual error occurs, 
+        # it will be the absolute last line printed in your action log.
+        run: make -C psp/build
 
       - name: Upload EBOOT Artifact
         uses: actions/upload-artifact@v4
