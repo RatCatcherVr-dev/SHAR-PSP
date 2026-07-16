@@ -22,12 +22,6 @@ on:
         options:
           - x86
           - x64
-      # dont care right now shouldnt have to have this its terrible because we should check based on the configuration input
-      is_uwp_build:
-        description: 'Check this if your using a UWP configuration'
-        required: false
-        default: true
-        type: boolean
         
 permissions:
   contents: write
@@ -72,20 +66,20 @@ jobs:
         doNotCache: false
 
     - name: Install Dependencies (VCPKG) (Non-UWP)
-      if: ${{ github.event.inputs.is_uwp_build == 'false' }}
+      if: ${{ !endsWith(github.event.inputs.configuration, 'Uwp') }}
       run: .\vcpkg\vcpkg.exe install
     - name: Install Dependencies (VCPKG) (UWP)
-      if: ${{ github.event.inputs.is_uwp_build == 'true' }}
+      if: ${{ endsWith(github.event.inputs.configuration, 'Uwp') }}
       run: .\vcpkg\vcpkg.exe install --triplet x64-uwp --allow-unsupported
     - name: Integrate (VCPKG)
       run: |
         .\vcpkg\vcpkg.exe integrate install
 
     - name: Build SRR2 (Non-UWP)
-      if: ${{ github.event.inputs.is_uwp_build == 'false' }}
+      if: ${{ !endsWith(github.event.inputs.configuration, 'Uwp') }}
       run: msbuild.exe src/srr2/SRR2.vcxproj /p:Configuration=${{ github.event.inputs.configuration }} /p:Platform=${{ github.event.inputs.platform }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /clp:PerformanceSummary /p:SolutionDir=${{ github.workspace }}
     - name: Build SRR2 (UWP)
-      if: ${{ github.event.inputs.is_uwp_build == 'true' }}
+      if: ${{ endsWith(github.event.inputs.configuration, 'Uwp') }}
       run: msbuild.exe src/srr2_uwp/SRR2_UWP.vcxproj /p:Configuration=${{ github.event.inputs.configuration }} /p:Platform=${{ github.event.inputs.platform }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m /clp:PerformanceSummary /p:SolutionDir=${{ github.workspace }}
       
     - name: Generate Release Version
@@ -98,7 +92,7 @@ jobs:
 
     # from https://github.com/XboxEmulationHub/XBSX2/blob/dev/.github/workflows/buildwinrt.yml#L27
     - name: Extract appx version from AppxManifest
-      if: ${{ github.event.inputs.is_uwp_build == 'true' }}
+      if: ${{ endsWith(github.event.inputs.configuration, 'Uwp') }}
       id: appx_version
       run: |
         $MANIFEST = [xml](Get-Content src\srr2_uwp\Package.appxmanifest)
@@ -119,22 +113,21 @@ jobs:
       id: create_release
       with:
         draft: false
-        prerelease: ${{ github.event.inputs.configuration != 'Release' && github.event.inputs.configuration != 'ReleaseUwp'  }}
+        prerelease: ${{ github.event.inputs.configuration != 'ReleaseWindows' && github.event.inputs.configuration != 'ReleaseUwp'  }}
         release_name: ${{ steps.release_version.outputs.release_version }}
         tag_name: ${{ steps.release_version.outputs.release_version }}
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#about-the-github_token-secret
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     # pretty much the upload build step but it makes a zip of build folder
-    # TODO(3ur): jank jank jank why the hell does this have the version inside the zip but no extension ? instead of just a zip with bin and obj folders
     - name: Zip Build (Non-UWP) # doesnt happen on uwp. we just upload appx directly
-      if: ${{ github.event.inputs.is_uwp_build == 'false' }}
+      if: ${{ !endsWith(github.event.inputs.configuration, 'Uwp') }}
       run: |
         tar -czf ${{ github.workspace }}/${{ steps.release_version.outputs.release_version }}.zip -C build .
 
-    # nasty boilerplate n duplicated code but im rushing this since i got half a screen and its still dying more 
+    # nasty boilerplate n duplicated code
     - name: Upload Build (Non-UWP)
-      if: ${{ github.event.inputs.is_uwp_build == 'false' }}
+      if: ${{ !endsWith(github.event.inputs.configuration, 'Uwp') }}
       uses: actions/upload-release-asset@v1
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }} 
@@ -145,7 +138,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Upload Build (UWP)
-      if: ${{ github.event.inputs.is_uwp_build == 'true' }}
+      if: ${{ endsWith(github.event.inputs.configuration, 'Uwp') }}
       uses: actions/upload-release-asset@v1
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }} 
